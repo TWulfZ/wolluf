@@ -121,20 +121,26 @@ Gate block (wolluf-sdd §4) on the final commit: fmt, clippy `-D warnings` (with
 
 | §12 criterion | State |
 |---|---|
-| Detects osu! | `detect_finds_corpus_install` green; WSL/Windows smokes (005 AC17/AC18) pending, manual |
+| Detects osu! | `detect_finds_corpus_install` green; WSL smoke (005 AC17) passed 2026-09-29 (user); Windows smoke (AC18) pending, manual |
 | Ingests idempotently, re-ingest adds 0 | `corpus_sync_pilot` green: 5,011 plays (4,969 + 42 replay-only), second sync `plays_new = 0` |
 | Archives replays and charts | `replays_linked` 4,969 = independent `Data/r` count; 1,425 charts archived |
 | "Which of these are you?" defaults | `players_corpus_selection` green (`TWulfZ` and the cfg-string alias auto; 8 others unticked); wizard UI tests green |
 | Identity table tests | 004 AC1–AC12 green |
-| ADR 0012 drafted | `docs/adr/0012-osg-handling.md`, Proposed, recommends O1c |
-| Workspace, xtask, deny, CI, ADRs, LICENSE | Done except the first green PR run and the deny advisories |
-| All gates green | Everything except `cargo deny check` (advisories) |
+| ADR 0012 drafted | `docs/adr/0012-osg-handling.md`, Accepted 2026-09-29 (O1c hybrid) |
+| Workspace, xtask, deny, CI, ADRs, LICENSE | Done except the first green PR run |
+| All gates green | All local gates green as of 2026-09-29 (deny included) |
 
 Decisions for the F0 exit review:
 1. `cargo deny` advisories: accept targeted, reasoned ignores for RUSTSEC-2024-0436 (`paste`) and RUSTSEC-2024-0370 (`proc-macro-error`), or another policy. The close stage did not change `deny.toml`.
 2. Accept ADR 0014 (Proposed) and ADR 0012 (Proposed, O1c). Accepting 0012 triggers its item 7: reword 006 AC8 around b25 as a final-record FC flag, stop warning on it in `codec::osg` and the survey, and update architecture §13 O1/O9.
 3. Spec inconsistency: ingest skips mode ≠ 3, so 004's `non_mania` bucket is always 0 and 003's `skipped_non_mania` counts std plays twice on a first sync.
 4. Push the branch for the first CI run (001 AC15, 005 T19), then run the 005 T20 manual checklist.
+
+Resolution (2026-09-29, `wolluf-odd` work on `chore/f0-close`):
+1. Done: targeted ignores for RUSTSEC-2024-0436 and RUSTSEC-2024-0370 in `deny.toml`; `cargo deny check` is green.
+2. Done: ADR 0014 and ADR 0012 are Accepted. ADR 0012 item 7 is applied: final-record b25 is the FC flag, `--strict` unexplained failures went from 54 to 18 (the 9 `final_short` files), and architecture §13 O1/O9 are closed.
+3. Done: each non-mania play is counted once per sync (pilot: 19 on the first and second sync); the always-empty `non_mania` bucket is removed.
+4. Open: the first CI run on a pushed branch (001 AC15, 005 T19) and the Windows smoke (005 AC18). The WSL smoke passed.
 
 ## Known F0 deviations from the architecture (each recorded in the named ADR at close)
 - Source snapshots are in-memory reads rather than temp copies, `play.passed` is nullable, and orphan `Data/r` replays become plays with `play.origin = 'replay_only'` (ADR 0014).

@@ -1,6 +1,6 @@
 # 006 .osg format spike
 
-Status: Done (AC8 and AC9 not met as written; see Deviations and ADR 0012)
+Status: Done (AC8 met after the ADR 0012 rewording on 2026-09-29; AC9 not met as written, see Deviations)
 Phase: F0 · Owner: TWulfZ · Date: 2026-09-28
 Links: architecture §3, §4 (D2, D9, D11), §5.2, §5.3, §7, §10, §12 (F0), §13 O1; ADR 0012 (drafted by this spec); research `03-maniahub-rejudge-drills-sessions-audit.txt` L150, L169, L333, L350; `research/scripts/rejudge/rejudge.py`, `osudb.py`, `osr_wiki.md`
 Siblings: 001 workspace-foundation (crates, pins, lints), 002 osu-stable-codecs (.osr header, osu!.db, scores.db decoders, `Diagnostics`), 003 store-ledger-sync (archives `.osg` bytes in the vault and sets `play.osg_sha`), 005 desktop-shell-cli (clap root of `wolluf`)
@@ -145,12 +145,13 @@ None. CLI only.
 - [x] AC5: Deterministic dump → insta goldens `osg_dump_v1_table`, `osg_dump_v2_json`, `osg_dump_events` over the synthetic fixtures pass (`cargo nextest run -p wolluf-app osg`).
 - [x] AC6: CLI contract → `apps/cli/tests/osg_cli.rs::{dump_table_exits_0, dump_json_is_valid, dump_missing_file_exits_2_not_found, dump_garbage_exits_2_parse_failed, survey_synthetic_corpus_strict_passes}` pass. These tests use a tempdir synthetic corpus and `CARGO_BIN_EXE_wolluf`.
 - [x] AC7: Read-only guarantee → `survey_does_not_modify_corpus` (tempdir corpus; the mtime and sha256 of every file are unchanged after the survey) passes, and 001's banned-API grep on `source-osu` stays green (`cargo xtask check-layers`).
-- [ ] AC8: Corpus invariants → `WOLLUF_CORPUS="/mnt/e/Games/osu!" cargo nextest run -p wolluf-app --run-ignored only osg_corpus_invariants` asserts:
+- [x] AC8: Corpus invariants → `WOLLUF_CORPUS="/mnt/e/Games/osu!" cargo nextest run -p wolluf-app --run-ignored only osg_corpus_invariants` asserts:
   - I1 and I2 on 100% of `.osg` files;
-  - I3 and I4 on 100%;
+  - I3 on 100% after reclassifying `b25 = 1` on the final record as the full-combo flag (ADR 0012 item 7), and I4 on 100%;
   - I5 on ≥ 99.5% (preliminary: 4,673 / 4,682).
   
   Every I5/I6 failure is listed by class in the report.
+  Reworded at ADR 0012's acceptance (2026-09-29); it originally read "I3 and I4 on 100%".
 - [ ] AC9: `wolluf osg survey --corpus "/mnt/e/Games/osu!" --json > <scratch>/osg-survey.json` runs in < 60 s on the pilot corpus. The Python oracle `python3 research/scripts/osg/osg.py --survey "/mnt/e/Games/osu!"` agrees with it on I1–I5 counts exactly.
 - [x] AC10: `python3 research/scripts/osg/correlate.py --corpus "/mnt/e/Games/osu!" --out <scratch>/osg-correlate.json` reports C1–C5 for every group listed under Correlations, with n per group.
 - [x] AC11: `docs/research/04-osg-format.md` exists. It has a byte-layout table, one verdict per hypothesis (confirmed / refuted / partial, with the invariant or correlation numbers), the coverage table (which plays lack an `.osg` and why, as far as known), and the remaining unknowns.

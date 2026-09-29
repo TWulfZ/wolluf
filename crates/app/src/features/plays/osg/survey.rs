@@ -1,7 +1,9 @@
 //! `wolluf osg survey` (spec 006 Behaviour): checks the structural hypotheses (I1–I8) on every
 //! `.osg` of a `Data/r` against the paired `.osr` header, osu!.db object counts and scores.db.
 //! The corpus is only ever read (R8, AC7). The Python oracle `research/scripts/osg/osg.py
-//! --survey` must agree on I1–I5 counts (AC9), so the `na` rules below mirror it.
+//! --survey` must agree on I1–I5 counts (AC9), so the `na` rules below mirror it. The one
+//! deliberate divergence is I3: ADR 0012 item 7 accepts the final-record FC flag, which the
+//! oracle still counts as an I3 failure (its `I3_*` rows still agree).
 
 use std::collections::BTreeMap;
 use std::fmt::{Display, Write as _};
@@ -14,7 +16,9 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use wolluf_core::{ChartMd5, DotNetTicks, ErrorCode, FileTime};
 use wolluf_source_osu::CodecError;
-use wolluf_source_osu::codec::osg::{OsgFile, OsgRecord, STRIDE_V1, STRIDE_V2, decode_osg};
+use wolluf_source_osu::codec::osg::{
+    OsgFile, OsgRecord, STRIDE_V1, STRIDE_V2, decode_osg, is_fc_flag,
+};
 use wolluf_source_osu::codec::osu_db::decode_osu_db;
 use wolluf_source_osu::codec::score_header::{JudgementCounts, ScoreHeader, read_score_header};
 use wolluf_source_osu::codec::scores_db::decode_scores_db;
@@ -48,8 +52,6 @@ const CLASS_OTHER: &str = "other";
 const CLASS_V1_SPLIT_LN: &str = "v1_split_ln";
 /// Spec 006 R4: a total short of R3 is the saved-failed-play signature.
 const CLASS_SHORT_TOTAL: &str = "short_total";
-/// The FC-flag candidate: `b25` set only on the last record.
-const CLASS_B25_FINAL_ONLY: &str = "b25_final_only";
 const CLASS_FINAL_ONLY: &str = "final_only";
 const CLASS_NONZERO: &str = "nonzero";
 const CLASS_FINAL_SHORT: &str = "final_short";
@@ -698,7 +700,9 @@ fn evaluate(
     summary
 }
 
-/// I3: `b28` flags the stride, `b4` and `b25` are reserved (H1).
+/// I3: `b28` flags the stride, `b4` and `b25` are reserved (H1), except the final-record FC
+/// flag (ADR 0012 item 7). `I3_b25` still records every nonzero `b25`: it is the FC-flag evidence
+/// the corpus harness cross-checks against the `.osr` perfect byte.
 fn check_bytes(v: &mut Verdicts, records: &[OsgRecord], v2: bool, stats: &mut DecodedStats) {
     let want_b28 = u8::from(v2);
     let ok_b28 = records.iter().all(|r| r.b28 == want_b28);
@@ -716,16 +720,8 @@ fn check_bytes(v: &mut Verdicts, records: &[OsgRecord], v2: bool, stats: &mut De
         CLASS_OTHER
     };
     set(v, Inv::I3B25, check(b25.is_empty(), b25_class));
-    let i3_class = if ok_b28 && ok_b4 && b25_final_only {
-        CLASS_B25_FINAL_ONLY
-    } else {
-        CLASS_OTHER
-    };
-    set(
-        v,
-        Inv::I3,
-        check(ok_b28 && ok_b4 && b25.is_empty(), i3_class),
-    );
+    let ok_b25 = b25.iter().all(|&i| is_fc_flag(records, i));
+    set(v, Inv::I3, check(ok_b28 && ok_b4 && ok_b25, CLASS_OTHER));
 }
 
 /// I4: time and every cumulative count never go down.

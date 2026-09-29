@@ -49,7 +49,7 @@ export function pilotAliasList(overrides: Partial<AliasListDto> = {}): AliasList
       row("", 1395, {
         byKeymode: [
           { bucket: "k7", n: 1376 },
-          { bucket: "non_mania", n: 19 },
+          { bucket: "unknown", n: 19 },
         ],
       }),
       row("W", 344),

@@ -1,18 +1,19 @@
 //! `SyncPlays` (spec 003 Behaviour): catalog → ingest → archive → finish, one idempotent pass.
 //! "Incremental" only means the pass finds little new work; there is no second code path.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use wolluf_core::{
-    BlobSha256, ChartMd5, ErrorCode, FileTime, Game, PlayId, StageId, UnixUs, VersionKey,
-    VersionKeyBuilder,
+    BlobSha256, ChartMd5, DotNetTicks, ErrorCode, FileTime, Game, PlayId, StageId, UnixUs,
+    VersionKey, VersionKeyBuilder,
 };
 use wolluf_source_osu::cfg_files::{list_user_cfgs, read_user_cfg};
 use wolluf_source_osu::codec::osr::{check_name_consistency, decode_osr};
 use wolluf_source_osu::codec::osu_db::{OsuDb, OsuDbBeatmap, decode_osu_db};
 use wolluf_source_osu::codec::replay_name::{ReplayFileKind, ReplayFileName};
+use wolluf_source_osu::codec::score_header::ScoreHeader;
 use wolluf_source_osu::codec::scores_db::decode_scores_db;
 use wolluf_source_osu::install::Platform;
 use wolluf_source_osu::paths::{is_drvfs_path, resolve_songs_dir};
@@ -32,7 +33,7 @@ use wolluf_store::repo::ledger::{
 use crate::context::blocking_join_error;
 use crate::errors::AppError;
 use crate::features::players::RefreshIdentityJob;
-use crate::features::plays::record::{Links, PlayDraft, draft};
+use crate::features::plays::record::{Links, PlayDraft, chart_md5, draft};
 use crate::jobs::dto::{JobKindDto, JobStageDto, JobSummaryDto, SyncSummaryDto};
 use crate::jobs::{ItemError, ItemResult, Job, JobCtx, JobFuture, JobSummary};
 
@@ -94,6 +95,7 @@ impl Job for SyncPlaysJob {
                     policy: &self.policy,
                     summary: SyncSummaryDto::default(),
                     changed: false,
+                    non_mania_scores: BTreeSet::new(),
                 }
                 .run()
             })
@@ -109,6 +111,9 @@ struct SyncRun<'a> {
     policy: &'a SnapshotPolicy,
     summary: SyncSummaryDto,
     changed: bool,
+    /// Non-mania scores.db rows counted by this pass: their `Data/r` replays are never
+    /// ingested, so orphan import would otherwise count the same play a second time.
+    non_mania_scores: BTreeSet<(ChartMd5, FileTime)>,
 }
 
 pub(crate) fn unix_us(t: SystemTime) -> UnixUs {
@@ -340,6 +345,13 @@ enum Orphan {
     NonMania,
 }
 
+/// The `Data/r` name key of a score; `None` when no replay name could carry it.
+fn play_key(header: &ScoreHeader) -> Option<(ChartMd5, FileTime)> {
+    let md5 = chart_md5(header).ok()?;
+    let filetime = DotNetTicks(header.timestamp_ticks).to_filetime()?;
+    Some((md5, filetime))
+}
+
 /// A replay without a score row is still a play (user decision 2026-09-28), built from its
 /// header exactly like a scores.db record, provided the header agrees with its name.
 fn prepare_orphan(
@@ -567,6 +579,9 @@ impl SyncRun<'_> {
         for (index, record) in db.scores().enumerate() {
             if record.header.mode != MANIA_MODE {
                 self.summary.skipped_non_mania += 1;
+                if let Some(key) = play_key(&record.header) {
+                    self.non_mania_scores.insert(key);
+                }
                 continue;
             }
             match draft(&record.header, record.online_id) {
@@ -771,7 +786,14 @@ impl SyncRun<'_> {
                     self.summary.orphan_replays += 1;
                     blobs_only.push(replay);
                 }
-                ItemResult::Done(Orphan::NonMania) => self.summary.skipped_non_mania += 1,
+                ItemResult::Done(Orphan::NonMania) => {
+                    if !self
+                        .non_mania_scores
+                        .contains(&(item.name.md5, item.name.filetime))
+                    {
+                        self.summary.skipped_non_mania += 1;
+                    }
+                }
                 ItemResult::Failed(_) | ItemResult::Skipped => {}
             }
         }
@@ -1438,6 +1460,24 @@ mod tests {
             (1, 0, 0)
         );
         assert_eq!(blob_count(&f), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn non_mania_score_with_replay_counted_once() {
+        let std_play = ScoreBuilder::mania(&md5_hex(b"std"), "TWulfZ", 1).mode(0);
+        let f = Fixture::new(&one_score_install(&std_play).replay(
+            &osr_name(&std_play),
+            OsrBuilder::new(std_play.clone()).build(),
+        ))
+        .await;
+        let (_, first) = f.sync().await;
+        assert_eq!(first.skipped_non_mania, 1, "scores.db row and its replay");
+        let (_, second) = f.sync().await;
+        assert_eq!(
+            second.skipped_non_mania, 1,
+            "scores.db unchanged, replay seen"
+        );
+        assert_eq!((counts(&f).0, blob_count(&f)), (0, 0));
     }
 
     type Manifest = BTreeMap<PathBuf, (u64, SystemTime, BlobSha256)>;

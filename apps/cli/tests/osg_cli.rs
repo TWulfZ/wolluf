@@ -207,8 +207,11 @@ fn dump_json_is_valid() {
 fn dump_warnings_go_to_stderr_and_exit_0() {
     let env = Env::new();
     let mut records = clean_records(2, 600);
-    records[1].b25 = 1;
-    let file = write(&env.dir.path().join("fc.osg"), &osg_bytes(&records, false));
+    records[0].b25 = 1;
+    let file = write(
+        &env.dir.path().join("reserved.osg"),
+        &osg_bytes(&records, false),
+    );
     env.wolluf()
         .args(["osg", "dump"])
         .arg(&file)
@@ -216,6 +219,35 @@ fn dump_warnings_go_to_stderr_and_exit_0() {
         .code(0)
         .stdout(contains("diagnostics=1"))
         .stderr(starts_with("warning: osg.nonzero_reserved"));
+}
+
+#[test]
+fn dump_final_record_fc_flag_is_silent() {
+    let env = Env::new();
+    let mut records = clean_records(2, 600);
+    records[1].b25 = 1;
+    let file = write(&env.dir.path().join("fc.osg"), &osg_bytes(&records, false));
+    env.wolluf()
+        .args(["osg", "dump"])
+        .arg(&file)
+        .assert()
+        .code(0)
+        .stdout(contains("diagnostics=0"))
+        .stderr("");
+}
+
+#[test]
+fn survey_strict_accepts_final_record_fc_flag() {
+    let env = Env::new();
+    let corpus = Corpus::new(&env);
+    let mut records = clean_records(4, 1_000_000);
+    records[3].b25 = 1;
+    corpus.pair(MD5_V1, 1, &records, ([0, 0, 0, 4, 0, 0], 1_000_000), 0);
+    env.wolluf()
+        .args(["osg", "survey", "--strict", "--corpus"])
+        .arg(&corpus.root)
+        .assert()
+        .code(0);
 }
 
 #[test]

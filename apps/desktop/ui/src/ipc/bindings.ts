@@ -185,7 +185,7 @@ export type JobStatusDto = "queued" | "running" | "ok" | "failed" | "cancelled";
 export type JobSummaryDto = { kind: "sync_plays"; counters: SyncSummaryDto };
 
 export type KeymodeCountDto = {
-	/**  `k1`..`k16`, `unknown` or `non_mania` (spec 004 `KeymodeBucket`). */
+	/**  `k1`..`k16` or `unknown` (`KeymodeBucket`). */
 	bucket: string,
 	n: number,
 };

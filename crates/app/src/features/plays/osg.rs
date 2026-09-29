@@ -58,14 +58,14 @@ mod tests {
     }
 
     /// A single MAX, a two-note chord (MAX + 300), a 200, a miss that resets combo, and the
-    /// trailing score-only record stable writes; the last record carries `b25 = 1` (the FC-flag
-    /// candidate) so the dump shows a diagnostic.
+    /// trailing score-only record stable writes. The miss record carries `b25 = 1`, which is
+    /// reserved away from the final record (ADR 0012 item 7), so the dump shows a diagnostic.
     fn v1_fixture() -> OsgFile {
         let mut last = rec(1_900, counts(2, 1, 1, 1), 1_205, 0, None);
         last.max_combo = 4;
-        last.b25 = 1;
         let mut miss = rec(1_500, counts(2, 1, 1, 1), 1_200, 0, None);
         miss.max_combo = 4;
+        miss.b25 = 1;
         OsgFile {
             client_version: CLIENT,
             score_system: Some(OsgScoreSystem::V1),
@@ -395,9 +395,11 @@ mod tests {
         assert_eq!(pfn(row(&report, "I1")), (6, 0, 0));
         // The orphan has no `.osr` to compare against.
         assert_eq!(pfn(row(&report, "I2")), (5, 0, 1));
-        assert_eq!(pfn(row(&report, "I3")), (5, 1, 0));
-        assert_eq!(row(&report, "I3").classes.get("b25_final_only"), Some(&1));
+        // ADR 0012 item 7: the final-record FC flag passes I3; the `I3_b25` row still records it.
+        assert_eq!(pfn(row(&report, "I3")), (6, 0, 0));
+        assert!(row(&report, "I3").classes.is_empty());
         assert_eq!(pfn(row(&report, "I3_b25")), (5, 1, 0));
+        assert_eq!(row(&report, "I3_b25").classes.get("final_only"), Some(&1));
         assert_eq!(pfn(row(&report, "I3_b28")), (6, 0, 0));
         assert_eq!(pfn(row(&report, "I4")), (6, 0, 0));
         let i5 = row(&report, "I5");
@@ -428,8 +430,31 @@ mod tests {
         assert_eq!(missing.by_player.get("Klinsx"), Some(&1));
         assert_eq!(missing.by_month.get("2026-04"), Some(&1));
         assert_eq!(report.sources.osu_db.status, "ok");
-        // I3 (b25), I5 and I7 have no listed exception class; I6 `short_total` is R4's.
-        assert_eq!(report.unexplained_failures(), 3);
+        // I5 and I7 have no listed exception class; I6 `short_total` is R4's.
+        assert_eq!(report.unexplained_failures(), 2);
+    }
+
+    #[test]
+    fn survey_i3_fails_on_b25_outside_the_fc_flag() {
+        let a = chart_a();
+        let early = play(&a, 1, counts(4, 0, 0, 0), 0);
+        let odd_value = play(&a, 2, counts(4, 0, 0, 0), 0);
+        let mut install = FakeInstall::new().osu_db(osu_db(&a));
+        let h = early.header();
+        let mut osg = osg_for(h.counts, h.score, false);
+        osg.records[0].b25 = 1;
+        install = with_pair(install, &early, &osg);
+        let h = odd_value.header();
+        let mut osg = osg_for(h.counts, h.score, false);
+        osg.records.last_mut().unwrap().b25 = 2;
+        install = with_pair(install, &odd_value, &osg);
+        let corpus = materialise(&install);
+        let report = run(&corpus.root);
+        let i3 = row(&report, "I3");
+        assert_eq!(pfn(i3), (0, 2, 0));
+        assert_eq!(i3.classes.get("other"), Some(&2));
+        assert_eq!(i3.explained, 0);
+        assert_eq!(report.unexplained_failures(), 2);
     }
 
     #[test]

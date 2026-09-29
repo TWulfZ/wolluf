@@ -6,7 +6,11 @@
 all-features = true
 
 [advisories]
-ignore = []
+# Both are "unmaintained" notices with no safe upgrade, reached only through pinned framework deps (ADR 0009).
+ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "paste (unmaintained) comes only via specta =2.0.0-rc.25" },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error (unmaintained) comes only via tauri 2.12 gtk/glib macros on Linux" },
+]
 
 [licenses]
 # No GPL/LGPL/AGPL in-process. Unicode-3.0 comes with unicode-ident (every proc-macro);

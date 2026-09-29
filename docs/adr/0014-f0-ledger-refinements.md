@@ -1,6 +1,6 @@
 # 0014 F0 ledger refinements
 
-- Status: Proposed
+- Status: Accepted (2026-09-29)
 - Date: 2026-09-28
 
 ## Context

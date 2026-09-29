@@ -19,20 +19,19 @@ pub const ALIAS_STATS_VERSION: u32 = 1;
 const CONFIG_TAG: &[u8] = b"wolluf.players.alias_stats.config.v1";
 const INPUT_TAG: &[u8] = b"wolluf.players.alias_stats.input.v1";
 
-/// Stable strings `k1`..`k16`, `unknown` (chart not in the catalog) and `non_mania`. The
-/// derived order (keymodes by columns, then unknown, then non-mania) is the canonical row order.
+/// Stable strings `k1`..`k16` and `unknown` (chart not in the catalog). The derived order
+/// (keymodes by columns, then unknown) is the canonical row order. There is no non-mania bucket:
+/// sync never ingests mode != 3 plays (spec 003 step 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KeymodeBucket {
     Keys(Keymode),
     Unknown,
-    NonMania,
 }
 
 impl KeymodeBucket {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "unknown" => Some(Self::Unknown),
-            "non_mania" => Some(Self::NonMania),
             _ => {
                 let digits = s.strip_prefix('k')?;
                 // One spelling per value: `k07` or `k+7` would alias `k7`.
@@ -50,7 +49,6 @@ impl fmt::Display for KeymodeBucket {
         match self {
             Self::Keys(keymode) => write!(f, "k{}", keymode.columns()),
             Self::Unknown => f.write_str("unknown"),
-            Self::NonMania => f.write_str("non_mania"),
         }
     }
 }
@@ -206,7 +204,7 @@ mod tests {
             online(play(3, 1, 900, 0xbb, keys(7))),
             replay(play(4, 1, 300, 0xaa, keys(4))),
             replay(play(5, 1, 700, 0xdd, KeymodeBucket::Unknown)),
-            play(6, 1, 200, 0xcc, KeymodeBucket::NonMania),
+            play(6, 1, 200, 0xcc, KeymodeBucket::Unknown),
             // Not a listed alias: ignored, never an extra row.
             play(7, 99, 50, 0xaa, keys(7)),
         ];
@@ -222,12 +220,7 @@ mod tests {
                 AliasStats {
                     alias_id: AliasId(1),
                     n_plays: 6,
-                    by_keymode: vec![
-                        (keys(4), 1),
-                        (keys(7), 3),
-                        (KeymodeBucket::Unknown, 1),
-                        (KeymodeBucket::NonMania, 1),
-                    ],
+                    by_keymode: vec![(keys(4), 1), (keys(7), 3), (KeymodeBucket::Unknown, 2)],
                     first_played_at: Some(UnixUs(100)),
                     last_played_at: Some(UnixUs(900)),
                     n_online: 2,
@@ -253,20 +246,31 @@ mod tests {
     fn keymode_bucket_strings() {
         let all: Vec<String> = (1..=16)
             .map(keys)
-            .chain([KeymodeBucket::Unknown, KeymodeBucket::NonMania])
+            .chain([KeymodeBucket::Unknown])
             .map(|b| b.to_string())
             .collect();
         assert_eq!(all.first().map(String::as_str), Some("k1"));
         assert_eq!(all[6], "k7");
         assert_eq!(all[15], "k16");
-        assert_eq!(&all[16..], ["unknown", "non_mania"]);
+        assert_eq!(&all[16..], ["unknown"]);
         for text in &all {
             assert_eq!(
                 KeymodeBucket::parse(text).map(|b| b.to_string()).as_ref(),
                 Some(text)
             );
         }
-        for bad in ["k0", "k17", "K7", "k07", "k+7", "k", "", "7", "k256"] {
+        for bad in [
+            "k0",
+            "k17",
+            "K7",
+            "k07",
+            "k+7",
+            "k",
+            "",
+            "7",
+            "k256",
+            "non_mania",
+        ] {
             assert_eq!(KeymodeBucket::parse(bad), None, "{bad:?}");
         }
     }

@@ -22,7 +22,6 @@ const SCORES_DB: &str = "scores.db";
 const REPLAY_DIR: &str = "Data/r";
 /// Spec 006 AC8: I5 may miss on at most 0.5% of the files it applies to.
 const I5_MIN_PASS_SHARE: f64 = 0.995;
-const CLASS_B25_FINAL_ONLY: &str = "b25_final_only";
 const CLASS_FINAL_ONLY: &str = "final_only";
 
 type ReplayKey = (ChartMd5, FileTime);
@@ -115,13 +114,21 @@ fn osg_corpus_invariants() {
         "{:?}",
         report.decode_failures
     );
-    for id in ["I1", "I2", "I3_b28", "I3_b4", "I4"] {
+    // AC8 as reworded by ADR 0012 item 7: I3 holds on every file once the final-record `b25`
+    // FC flag is not counted as reserved.
+    for id in ["I1", "I2", "I3", "I3_b28", "I3_b4", "I4"] {
         assert_all_pass(&report, id);
     }
+    assert_eq!(
+        report.distributions.diagnostics.get("osg.nonzero_reserved"),
+        None,
+        "{:?}",
+        report.distributions.diagnostics
+    );
 
-    // Deviation from AC8's "I3 on 100%": `b25` is not reserved. It is set on the last record
-    // only and only on full-combo plays (the `.osr` perfect byte); the pilot has one full combo
-    // without it (36 of 37), so the flag is asserted one way, never as zero.
+    // `b25` is set on the last record only and only on full-combo plays (the `.osr` perfect
+    // byte); the pilot has one full combo without it (36 of 37), so the flag is asserted one way,
+    // never as zero.
     let b25 = row(&report, "I3_b25");
     assert_eq!(
         b25.classes.keys().collect::<Vec<_>>(),
@@ -131,12 +138,6 @@ fn osg_corpus_invariants() {
             vec![CLASS_FINAL_ONLY]
         },
         "b25 set anywhere but the last record: {b25:?}"
-    );
-    let i3 = row(&report, "I3");
-    assert_eq!(
-        i3.classes.get(CLASS_B25_FINAL_ONLY).copied().unwrap_or(0),
-        i3.fail,
-        "I3 fails only through the final-record b25 flag: {i3:?}"
     );
     let b25_files: BTreeSet<ReplayKey> = b25
         .examples

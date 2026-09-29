@@ -1,6 +1,6 @@
 # 04 `.osg` format: spike findings
 
-Status: verified on the pilot corpus, 2026-09-28 (read-only). Spec: `docs/specs/006-osg-spike/spec.md`. Decision: `docs/adr/0012-osg-handling.md` (Proposed).
+Status: verified on the pilot corpus, 2026-09-28 (read-only). Spec: `docs/specs/006-osg-spike/spec.md`. Decision: `docs/adr/0012-osg-handling.md` (Accepted 2026-09-29).
 
 ## Summary
 - An `.osg` is stable's own **judgement timeline** for one play. It has an 8-byte header (client build, record count), then one fixed-size record per score-changing update. Each record holds the map-time instant, the cumulative judgement counts in `.osr` order, score, max combo, current combo, a life value and a score-system flag. ScoreV2 files add two `f64` per record.

@@ -38,8 +38,7 @@
     },
     "split": "{{online}} online · {{offline}} offline",
     "keymode": {
-      "unknown": "Unknown",
-      "non_mania": "Other modes"
+      "unknown": "Unknown"
     },
     "dateRange": "{{from}} – {{to}}",
     "chartTimes": "×{{n}}",

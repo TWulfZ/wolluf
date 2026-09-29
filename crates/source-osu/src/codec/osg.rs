@@ -36,8 +36,8 @@ pub struct OsgFile {
     pub records: Vec<OsgRecord>,
 }
 
-/// One record per score-changing update (H1). `b4`, `b25` and `b28` are named but not
-/// interpreted until the spike confirms them.
+/// One record per score-changing update (H1). `b4`, `b25` and `b28` are kept raw; only the
+/// final-record `b25` is interpreted (`is_fc_flag`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct OsgRecord {
     pub t_ms: i32,
@@ -52,6 +52,14 @@ pub struct OsgRecord {
     pub b28: u8,
     /// `f0`, `f1`; present exactly in 45-byte records.
     pub v2: Option<[f64; 2]>,
+}
+
+/// ADR 0012 item 7: `b25 = 1` on the final record is stable's full-combo flag. It is not an FC
+/// oracle (one pilot FC lacks it); FC status comes from the `.osr` header.
+pub const FC_FLAG: u8 = 1;
+
+pub fn is_fc_flag(records: &[OsgRecord], idx: usize) -> bool {
+    idx + 1 == records.len() && records[idx].b25 == FC_FLAG
 }
 
 pub fn decode_osg(bytes: &[u8]) -> Result<(OsgFile, Diagnostics), CodecError> {
@@ -156,7 +164,7 @@ fn check_records(records: &[OsgRecord], stride: usize, diags: &mut Diagnostics) 
         if r.b28 != v2_flag {
             flag.hit(idx);
         }
-        if r.b4 != 0 || r.b25 != 0 {
+        if r.b4 != 0 || (r.b25 != 0 && !is_fc_flag(records, idx)) {
             reserved.hit(idx);
         }
         if let Some(prev) = idx.checked_sub(1).and_then(|p| records.get(p)) {
@@ -353,6 +361,39 @@ mod tests {
         reserved.b4 = 3;
         let (_, diags) = decode_osg(&encode_osg(&file(vec![reserved]))).unwrap();
         assert_eq!(diags.codes(), vec![DiagCode::OsgNonzeroReserved]);
+    }
+
+    #[test]
+    fn final_record_b25_is_fc_flag_not_reserved() {
+        let decode = |records: Vec<OsgRecord>| decode_osg(&encode_osg(&file(records))).unwrap().1;
+        let flagged = |mut r: OsgRecord, b25: u8| {
+            r.b25 = b25;
+            r
+        };
+        let silent = [
+            vec![record(1, 1, None), flagged(record(2, 2, None), 1)],
+            vec![flagged(record(1, 1, None), 1)],
+            vec![
+                record(1, 1, Some([0.0, 0.0])),
+                flagged(record(2, 2, Some([0.0, 0.0])), 1),
+            ],
+        ];
+        for records in silent {
+            let diags = decode(records);
+            assert!(diags.is_empty(), "{diags:?}");
+        }
+
+        let diags = decode(vec![flagged(record(1, 1, None), 1), record(2, 2, None)]);
+        assert_eq!(diags.codes(), vec![DiagCode::OsgNonzeroReserved]);
+        assert_eq!(diags.as_slice()[0].offset, Some(8));
+        // Only the value 1 is the flag; any other final-record value stays unexplained.
+        let diags = decode(vec![record(1, 1, None), flagged(record(2, 2, None), 2)]);
+        assert_eq!(diags.codes(), vec![DiagCode::OsgNonzeroReserved]);
+        let mut b4_on_final = flagged(record(2, 2, None), 1);
+        b4_on_final.b4 = 1;
+        let diags = decode(vec![record(1, 1, None), b4_on_final]);
+        assert_eq!(diags.codes(), vec![DiagCode::OsgNonzeroReserved]);
+        assert_eq!(diags.as_slice()[0].offset, Some((8 + STRIDE_V1) as u64));
     }
 
     #[test]

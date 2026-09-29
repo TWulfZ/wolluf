@@ -57,7 +57,7 @@ pub struct AutoMatchDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct KeymodeCountDto {
-    /// `k1`..`k16`, `unknown` or `non_mania` (spec 004 `KeymodeBucket`).
+    /// `k1`..`k16` or `unknown` (`KeymodeBucket`).
     pub bucket: String,
     pub n: u32,
 }

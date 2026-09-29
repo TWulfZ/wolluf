@@ -712,7 +712,7 @@ The local feedback capture schema (§5.3) exists from F0/F1, so every signal col
 
 | # | Decision | Options | Decide by |
 |---|---|---|---|
-| O1 | What .osg contains | (a) stable's own judgements → LN judging becomes a decode stage and re-judging LN is dropped; (b) not usable → offset-based LN metrics with confidence tags | F0 spike → ADR 0012 |
+| O1 | What .osg contains | (a) stable's own judgements → LN judging becomes a decode stage and re-judging LN is dropped; (b) not usable → offset-based LN metrics with confidence tags; (c) hybrid → `.osg` as a per-event oracle beside re-judge | Closed in F0: (c) hybrid; uniquely assigned `.osg` events give stable's judgement, everything else is re-judged (ADR 0012) |
 | O2 | LN evidence policy while judging is approximate | Down-weight LN axes by parity confidence vs exclude tier-based LN evidence entirely | F2 |
 | O3 | Telemetry re-identification mitigation | Per-play segment subsampling rate, y quantisation step, day jitter; whether residual risk is acceptable at all | Before any upload (F5), ADR 0007 |
 | O4 | osu! OAuth for a desktop public client | User-registered OAuth app (credentials in keychain) vs a token-exchange proxy vs skipping API linking (identity works without it) | F3 |
@@ -720,7 +720,7 @@ The local feedback capture schema (§5.3) exists from F0/F1, so every signal col
 | O6 | Label tables distribution | Ship tables (license check per source) vs import from the user's local collections only | F1 |
 | O7 | θ scale for LN | Jinjin LN dans as anchor despite few labels (60 KomeijiDove LN, 14 dans) vs a separate LN scale | F3 |
 | O8 | Per-chart IRT offsets | Ever identifiable at this community size, or pattern/feature-level calibration only | F5, based on data volume |
-| O9 | Vault default | Archive all plays (current default) vs self only; size cap policy | F0 (revisit with real sizes) |
+| O9 | Vault default | Archive all plays (current default) vs self only; size cap policy | F0 (revisit with real sizes). Answered for `.osg` by ADR 0012: every `.osg` stays archived raw and content-addressed (511 MB on the pilot); compression at rest may come later if sha256 stays over the raw bytes |
 | O10 | IPC generator | tauri-specta v2 (default) vs ts-rs + hand wrappers if the RC regresses | Closed in F0: tauri-specta `=2.0.0-rc.25`, ts-rs fallback kept (ADR 0009) |
 | O11 | Local multi-person chart calibration from downloaded replays | Off by default; enable only if it measurably improves S1/S3 locally | F5 |
 | O12 | Interactive/bulk pool split | Keep a single pool if profiling in F3 shows interactive latency is fine | F3 |
