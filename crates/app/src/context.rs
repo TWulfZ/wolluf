@@ -15,6 +15,7 @@ use wolluf_store::{DbHandle, InstanceLock, Vault, open_cache_db, open_user_db};
 
 use crate::errors::{AppError, keys};
 use crate::events::AppEvent;
+use crate::features::labeling::LabelingService;
 use crate::features::library::LibraryService;
 use crate::features::players::PlayersService;
 use crate::features::plays::PlaysService;
@@ -324,6 +325,10 @@ impl AppContext {
 
     pub fn library(&self) -> LibraryService<'_> {
         LibraryService::new(self)
+    }
+
+    pub fn labeling(&self) -> LabelingService<'_> {
+        LabelingService::new(self)
     }
 
     pub fn players(&self) -> PlayersService<'_> {

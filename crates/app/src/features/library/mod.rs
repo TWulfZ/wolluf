@@ -8,4 +8,4 @@ mod service;
 pub(crate) mod testkit;
 
 pub use index::IndexLibraryJob;
-pub use service::LibraryService;
+pub use service::{ChartRows, LibraryService};

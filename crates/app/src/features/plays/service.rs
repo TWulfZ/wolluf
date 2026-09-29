@@ -1,6 +1,10 @@
 //! `PlaysService` (spec 003 IPC): the entry point shells and the watcher use to sync.
 
+use std::collections::BTreeSet;
+
 use tokio::sync::broadcast::error::RecvError;
+use wolluf_core::{AliasId, ChartMd5};
+use wolluf_store::repo::ledger::play;
 
 use crate::context::{AppContext, InstallId, blocking_join_error};
 use crate::errors::AppError;
@@ -15,6 +19,18 @@ pub struct PlaysService<'a> {
 impl<'a> PlaysService<'a> {
     pub fn new(ctx: &'a AppContext) -> Self {
         Self { ctx }
+    }
+
+    /// Charts with a play under one of `aliases`; callers pass a profile's aliases so another
+    /// player's plays never count as the user's.
+    pub async fn played_charts(&self, aliases: &[AliasId]) -> Result<BTreeSet<ChartMd5>, AppError> {
+        let user = self.ctx.user_db().clone();
+        let aliases = aliases.to_vec();
+        let played =
+            tokio::task::spawn_blocking(move || user.read(|c| play::charts_played_by(c, &aliases)))
+                .await
+                .map_err(blocking_join_error)??;
+        Ok(played)
     }
 
     /// Returns at once with the job id (a queued sync for the same install is reused). An
@@ -139,6 +155,42 @@ mod tests {
         let job = listed.iter().find(|j| j.id == id).unwrap();
         assert_eq!(job.kind, crate::jobs::JobKindDto::SyncPlays);
         assert_eq!(job.status, JobStatusDto::Ok);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn played_charts_are_scoped_to_the_aliases() {
+        let install = FakeInstall::new().scores_db(scores_db(&[
+            ScoreBuilder::mania(&md5_hex(b"mine"), "TWulfZ", 1),
+            ScoreBuilder::mania(&md5_hex(b"theirs"), "Kovacs", 2),
+        ]));
+        let f = Fixture::new(&install).await;
+        f.ctx.plays().sync_and_wait(f.install).await.unwrap();
+        let aliases = f
+            .ctx
+            .user_db()
+            .read(wolluf_store::repo::ledger::alias::list)
+            .unwrap();
+        let alias = |name: &str| {
+            aliases
+                .iter()
+                .find(|a| a.raw_name == name.as_bytes())
+                .unwrap()
+                .id
+        };
+        let md5 = |b: &[u8]| -> wolluf_core::ChartMd5 { md5_hex(b).parse().unwrap() };
+        let plays = f.ctx.plays();
+        assert_eq!(
+            plays.played_charts(&[alias("TWulfZ")]).await.unwrap(),
+            [md5(b"mine")].into()
+        );
+        assert_eq!(
+            plays
+                .played_charts(&[alias("TWulfZ"), alias("Kovacs")])
+                .await
+                .unwrap(),
+            [md5(b"mine"), md5(b"theirs")].into()
+        );
+        assert!(plays.played_charts(&[]).await.unwrap().is_empty());
     }
 
     #[test]

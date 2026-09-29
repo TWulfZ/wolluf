@@ -2,6 +2,7 @@
 
 pub(crate) mod chart;
 pub(crate) mod jobs;
+pub(crate) mod label;
 pub(crate) mod library;
 pub(crate) mod osg;
 pub(crate) mod players;

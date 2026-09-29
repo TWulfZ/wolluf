@@ -108,6 +108,28 @@ pub struct ChartParsed {
     pub length_ms: u32,
 }
 
+/// `ChartParsed` without its blob, for scans over the whole library.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParsedSummary {
+    pub md5: ChartMd5,
+    pub n_notes: u32,
+    pub n_ln: u32,
+    pub ln_ratio: f64,
+    pub length_ms: u32,
+}
+
+impl ChartParsed {
+    pub fn summary(&self) -> ParsedSummary {
+        ParsedSummary {
+            md5: self.md5,
+            n_notes: self.n_notes,
+            n_ln: self.n_ln,
+            ln_ratio: self.ln_ratio,
+            length_ms: self.length_ms,
+        }
+    }
+}
+
 /// One source label of a chart; the chart and key are given by the call that stores it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartLabel {
@@ -505,6 +527,26 @@ pub mod chart_parsed {
             .query_row([vkey.0], |r| int(r, 0))?)
     }
 
+    /// Every chart parsed under `vkey`, by md5.
+    pub fn summaries(conn: Conn<'_>, vkey: VersionKey) -> Result<Vec<ParsedSummary>, StoreError> {
+        let mut stmt = conn.0.prepare_cached(
+            "SELECT md5, n_notes, n_ln, ln_ratio, length_ms FROM chart_parsed
+             WHERE vkey = ?1 ORDER BY md5",
+        )?;
+        let rows = stmt
+            .query_map([vkey.0], |row| {
+                Ok(ParsedSummary {
+                    md5: parsed(row, 0, str::parse::<ChartMd5>)?,
+                    n_notes: int(row, 1)?,
+                    n_ln: int(row, 2)?,
+                    ln_ratio: row.get(3)?,
+                    length_ms: int(row, 4)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
     /// GC hook (§5.5 keeps recent keys); returns the number of rows deleted.
     pub fn prune_except(tx: &Tx<'_>, keep: &[VersionKey]) -> Result<u64, StoreError> {
         prune_vkeys_except(tx, "chart_parsed", keep)
@@ -806,6 +848,27 @@ mod tests {
             })
             .unwrap();
         assert_eq!(left, (0, Some(a2)));
+    }
+
+    #[test]
+    fn chart_parsed_summaries_skip_the_blob_and_other_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_cache_db(&dir.path().join("cache.db")).unwrap();
+        let rows = [
+            parsed_chart(MD5_B, VKEY_1, 800),
+            parsed_chart(MD5_A, VKEY_1, 1_000),
+            parsed_chart(MD5_A, VKEY_2, 1_004),
+        ];
+        db.write(move |tx| rows.iter().try_for_each(|r| chart_parsed::put(tx, r)))
+            .unwrap();
+        let got = db.read(|c| chart_parsed::summaries(c, VKEY_1)).unwrap();
+        let mut want = vec![
+            parsed_chart(MD5_A, VKEY_1, 1_000).summary(),
+            parsed_chart(MD5_B, VKEY_1, 800).summary(),
+        ];
+        assert_eq!(want[0].ln_ratio, 0.25);
+        want.sort_by_key(|s| s.md5);
+        assert_eq!(got, want, "md5 order");
     }
 
     fn label(scale: &str, level_ord: Option<f64>, level_text: &str) -> ChartLabel {

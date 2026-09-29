@@ -83,6 +83,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let s = Session::open(data_dir, log).await?;
             cmd::chart::run(&s.ctx, cmd, json).await
         }
+        Command::Label(args) => {
+            with_session(data_dir, log, async |ctx| {
+                cmd::label::run(ctx, args, json).await
+            })
+            .await
+        }
     }
 }
 

@@ -592,6 +592,24 @@ pub mod play {
         Ok(keys)
     }
 
+    /// Charts with a play under any of `aliases`.
+    pub fn charts_played_by(
+        conn: Conn<'_>,
+        aliases: &[AliasId],
+    ) -> Result<BTreeSet<ChartMd5>, StoreError> {
+        let placeholders = vec!["?"; aliases.len()].join(", ");
+        let mut stmt = conn.0.prepare(&format!(
+            "SELECT DISTINCT chart_md5 FROM play WHERE alias_id IN ({placeholders})"
+        ))?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(aliases.iter().map(|a| a.0)),
+                |row| parsed(row, 0, str::parse::<ChartMd5>),
+            )?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
     pub fn charts_without_blob(conn: Conn<'_>) -> Result<Vec<ChartMd5>, StoreError> {
         let mut stmt = conn.0.prepare(
             "SELECT DISTINCT chart_md5 FROM play WHERE chart_sha IS NULL ORDER BY chart_md5",
@@ -660,6 +678,19 @@ pub mod feedback_event {
             ),
         )?;
         Ok(())
+    }
+
+    /// The greatest id so far; writers use it to keep ids strictly increasing when several
+    /// events share one millisecond.
+    pub fn last_id(conn: Conn<'_>) -> Result<Option<ulid::Ulid>, StoreError> {
+        let max: Option<String> =
+            conn.0
+                .query_row("SELECT max(id) FROM feedback_event", [], |r| r.get(0))?;
+        max.map(|s| {
+            ulid::Ulid::from_string(&s)
+                .map_err(|e| StoreError::InvalidData(format!("feedback_event id {s}: {e}")))
+        })
+        .transpose()
     }
 
     /// ULIDs sort by creation time, so id order is append order.
@@ -1184,6 +1215,29 @@ pub(crate) mod tests {
         assert!(blob::exists(tx.conn(), sha(9)).unwrap());
         assert!(!blob::exists(tx.conn(), sha(8)).unwrap());
         assert_eq!(blob::count(tx.conn()).unwrap(), 1);
+    }
+
+    #[test]
+    fn charts_played_by_is_scoped_to_the_aliases() {
+        let conn = migrated();
+        crate::user::testkit::seed(&conn);
+        let mut conn = conn;
+        let tx = tx(&mut conn);
+        let md5_a = md5(MD5_A);
+        assert_eq!(
+            play::charts_played_by(tx.conn(), &[AliasId(2)]).unwrap(),
+            [md5_a].into()
+        );
+        assert_eq!(
+            play::charts_played_by(tx.conn(), &[AliasId(1), AliasId(3)]).unwrap(),
+            [md5_a].into()
+        );
+        assert!(
+            play::charts_played_by(tx.conn(), &[AliasId(3)])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(play::charts_played_by(tx.conn(), &[]).unwrap().is_empty());
     }
 
     #[test]

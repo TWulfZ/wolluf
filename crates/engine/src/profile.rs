@@ -5,6 +5,8 @@ use wolluf_chart::Layout;
 use wolluf_chart::layout::DEFAULT_K7;
 use wolluf_core::Keymode;
 
+use crate::taxonomy::{self, PatternDef};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeymodeProfile {
     pub keymode: Keymode,
@@ -12,6 +14,8 @@ pub struct KeymodeProfile {
     pub default_layout: &'static str,
     /// Whether difficulty-name labels (`crate::labels`) are extracted for this keymode.
     pub label_sources: bool,
+    /// The keymode's pattern ids (`crate::taxonomy`).
+    pub taxonomy: &'static [PatternDef],
 }
 
 impl KeymodeProfile {
@@ -33,6 +37,7 @@ const BUILTIN: &[KeymodeProfile] = &[KeymodeProfile {
     keymode: Keymode::K7,
     default_layout: DEFAULT_K7,
     label_sources: true,
+    taxonomy: taxonomy::k7(),
 }];
 
 /// The concrete set of keymodes the engine knows (D5); features never hard-code it.

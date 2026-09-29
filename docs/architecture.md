@@ -308,6 +308,13 @@ settings(key, json)                                           -- UI/UX preferenc
 
 It never lives in `settings`. That is what makes every model state replayable.
 
+**Feedback event shapes.** Payloads are versioned; a shape change bumps `v` or adds a new kind, never rewrites rows.
+- `segment_label` (gold labels from `wolluf label`, later the Playfield relabel):
+  - subject `{"anchor":{chart_md5, t0_us, t1_us, cols:[0-based], keymode}}`;
+  - payload `{"v":1, "action":"assert_set"|"assert_none", "origin":"gold", "patterns":[sorted PatternIds], "flags":{"mixed", "unsure", "thumb_pref"?: "left"|"right"}}`, where `assert_set` needs a non-empty `patterns` and `assert_none` (no clear pattern) needs an empty one.
+- `undo`: subject `{"event_id"}`, payload `{"undone_kind"}`. It compensates and never deletes, and only the same profile can undo, once.
+- Pattern ids and their meaning: ADR 0017.
+
 ### 5.4 cache.db (disposable)
 
 Every derived table carries `vkey` (§5.5).

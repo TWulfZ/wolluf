@@ -2,6 +2,7 @@
 //! never leaves this crate (D6).
 
 pub mod cache;
+pub mod labels;
 pub mod ledger;
 pub mod players;
 mod sql;

@@ -64,6 +64,44 @@ pub mod source {
     pub const OTHER_DAN_PRACTICE: &str = "other_dan_practice";
 }
 
+/// How a source's levels compare: dan ordinals share one ladder across sources, while BMS and
+/// O2Jam levels only order charts within their own scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LevelFamily {
+    Dan,
+    Bms,
+    O2jam,
+}
+
+impl LevelFamily {
+    pub const ALL: [Self; 3] = [Self::Dan, Self::Bms, Self::O2jam];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dan => "dan",
+            Self::Bms => "bms",
+            Self::O2jam => "o2jam",
+        }
+    }
+}
+
+/// `None` for a source this build does not know.
+pub fn level_family(source: &str) -> Option<LevelFamily> {
+    match source {
+        source::JINJIN_DAN_REGULAR
+        | source::JINJIN_DAN_LN
+        | source::JINJIN_DAN_LN_V1
+        | source::EMPEROR_LN_DAN
+        | source::KOMEIJIDOVE_PRACTICE
+        | source::WILD_DAN
+        | source::ROAD_TO_GAMMA
+        | source::OTHER_DAN_PRACTICE => Some(LevelFamily::Dan),
+        source::BMS_5YNT3CK => Some(LevelFamily::Bms),
+        source::O2JAM => Some(LevelFamily::O2jam),
+        _ => None,
+    }
+}
+
 /// Dan-course sources use their source id as their scale.
 pub mod scale {
     pub const JINJIN_DAN: &str = "jinjin_dan";

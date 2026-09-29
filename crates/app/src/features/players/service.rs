@@ -2,6 +2,7 @@
 //! features (D12), plus the `RefreshIdentity` job chained after every `SyncPlays`.
 
 use wolluf_core::{AliasId, Keymode, ProfileId};
+use wolluf_store::repo::players::{profile, profile_alias};
 
 use super::IdentityParams;
 use super::identity::{AliasList, DecisionSource, EntryRef, Identity, ProfileEntry};
@@ -113,6 +114,29 @@ impl<'a> PlayersService<'a> {
         self.blocking(move |i| i.set_default(profile_id)).await?;
         self.players_changed();
         Ok(())
+    }
+
+    /// The self profile's id without resolving any scope; `None` before the first identity
+    /// refresh.
+    pub async fn self_profile_id(&self) -> Result<Option<ProfileId>, AppError> {
+        self.blocking(|i| Ok(i.user.read(profile::self_profile)?.map(|p| p.id)))
+            .await
+    }
+
+    /// The aliases in the self profile, ascending; empty without one.
+    pub async fn self_alias_ids(&self) -> Result<Vec<AliasId>, AppError> {
+        self.blocking(|i| {
+            Ok(i.user.read(|c| {
+                let Some(me) = profile::self_profile(c)? else {
+                    return Ok(Vec::new());
+                };
+                Ok(profile_alias::list(c, me.id)?
+                    .into_iter()
+                    .map(|r| r.alias_id)
+                    .collect())
+            })?)
+        })
+        .await
     }
 
     pub async fn list_profiles(&self, keymode: Keymode) -> Result<Vec<ProfileEntry>, AppError> {
@@ -264,6 +288,36 @@ mod tests {
             .find(|e| e.kind == EntryKind::SelfProfile)
             .and_then(|e| e.scopes.first())
             .map(|s| s.hash)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn self_profile_id_and_aliases_are_the_stored_self() {
+        let empty = Fixture::new(&FakeInstall::new()).await;
+        assert_eq!(empty.ctx.players().self_profile_id().await.unwrap(), None);
+        assert!(
+            empty
+                .ctx
+                .players()
+                .self_alias_ids()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let f = pilot(Some(PILOT_CFG_USERNAME)).await;
+        let me = f
+            .ctx
+            .user_db()
+            .read(profile::self_profile)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            f.ctx.players().self_profile_id().await.unwrap(),
+            Some(me.id)
+        );
+        let mut want = vec![id(&f, TWULFZ), id(&f, PILOT_CFG_USERNAME)];
+        want.sort();
+        assert_eq!(f.ctx.players().self_alias_ids().await.unwrap(), want);
     }
 
     #[tokio::test(flavor = "multi_thread")]

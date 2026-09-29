@@ -733,3 +733,24 @@ fn rate_marker() {
         assert_eq!(has_rate_marker(version), expected, "{version:?}");
     }
 }
+
+#[test]
+fn level_family_of_every_source() {
+    for dan in [
+        source::JINJIN_DAN_REGULAR,
+        source::JINJIN_DAN_LN,
+        source::JINJIN_DAN_LN_V1,
+        source::EMPEROR_LN_DAN,
+        source::KOMEIJIDOVE_PRACTICE,
+        source::WILD_DAN,
+        source::ROAD_TO_GAMMA,
+        source::OTHER_DAN_PRACTICE,
+    ] {
+        assert_eq!(level_family(dan), Some(LevelFamily::Dan), "{dan}");
+    }
+    assert_eq!(level_family(source::BMS_5YNT3CK), Some(LevelFamily::Bms));
+    assert_eq!(level_family(source::O2JAM), Some(LevelFamily::O2jam));
+    assert_eq!(level_family("nope"), None);
+    let ids: Vec<&str> = LevelFamily::ALL.iter().map(|f| f.as_str()).collect();
+    assert_eq!(ids, ["dan", "bms", "o2jam"]);
+}

@@ -52,6 +52,8 @@ pub(crate) enum Command {
     /// One indexed chart.
     #[command(subcommand)]
     Chart(ChartCmd),
+    /// Blind gold-set labelling: label sampled chart windows by pattern (interactive, stdin).
+    Label(LabelArgs),
     /// `.osg` spike tools: they only read the given files and never open the data dir.
     #[command(subcommand)]
     Osg(OsgCmd),
@@ -196,6 +198,65 @@ pub(crate) fn parse_time_ms(s: &str) -> Result<i32, String> {
     }
     // Non-negative and at most i32::MAX by the checks above, so the cast is exact.
     Ok(ms as i32)
+}
+
+/// Without a subcommand, runs the labelling session.
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(crate) struct LabelArgs {
+    #[command(subcommand)]
+    pub(crate) command: Option<LabelCmd>,
+    #[command(flatten)]
+    pub(crate) session: LabelSessionArgs,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct LabelSessionArgs {
+    /// Sampling seed; defaults to the current time and is printed, so a session can be replayed.
+    #[arg(long, value_name = "N")]
+    pub(crate) seed: Option<u64>,
+    /// Window length, in seconds (`4`, `2.5`) or `mm:ss[.fff]`.
+    #[arg(
+        long = "window",
+        value_name = "SECS",
+        default_value = "4",
+        value_parser = parse_window_ms
+    )]
+    pub(crate) window_ms: u32,
+    #[arg(long, value_name = "N", default_value_t = 7)]
+    pub(crate) keys: u8,
+    /// Only charts with a label of this scale.
+    #[arg(long, value_name = "S")]
+    pub(crate) scale: Option<String>,
+    /// Inclusive lower bound on the label level.
+    #[arg(long, value_name = "X")]
+    pub(crate) level_min: Option<f64>,
+    /// Inclusive upper bound on the label level.
+    #[arg(long, value_name = "Y")]
+    pub(crate) level_max: Option<f64>,
+}
+
+/// Relative to the working directory, so running from the repo root lands in the committed
+/// fixture folder (architecture §3 `fixtures/labels/`).
+const DEFAULT_LABEL_EXPORT: &str = "fixtures/labels/gold-7k.jsonl";
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum LabelCmd {
+    /// Counts of the labelled set per pattern, axis, stratum and flag.
+    Stats,
+    /// Write the gold set as JSONL: anchors and pattern ids only, sorted by (md5, t0).
+    Export {
+        #[arg(long, value_name = "PATH", default_value = DEFAULT_LABEL_EXPORT)]
+        out: PathBuf,
+    },
+}
+
+fn parse_window_ms(s: &str) -> Result<u32, String> {
+    let ms = parse_time_ms(s)?;
+    u32::try_from(ms)
+        .ok()
+        .filter(|&ms| ms > 0)
+        .ok_or_else(|| format!("`{s}` is not a window: it must be longer than 0 s"))
 }
 
 #[derive(Debug, Subcommand)]
@@ -394,6 +455,80 @@ mod tests {
         let err =
             Cli::try_parse_from(["wolluf", "chart", "show", "abc", "--from", "x"]).unwrap_err();
         assert_eq!(err.exit_code(), i32::from(exit::USAGE));
+    }
+
+    #[test]
+    fn label_session_defaults() {
+        let cli = Cli::try_parse_from(["wolluf", "label"]).unwrap();
+        let Command::Label(args) = cli.command else {
+            panic!("{:?}", cli.command);
+        };
+        assert!(args.command.is_none());
+        let s = args.session;
+        assert_eq!((s.seed, s.window_ms, s.keys), (None, 4_000, 7));
+        assert_eq!((s.scale, s.level_min, s.level_max), (None, None, None));
+    }
+
+    #[test]
+    fn label_session_flags() {
+        let cli = Cli::try_parse_from([
+            "wolluf",
+            "label",
+            "--seed",
+            "18446744073709551615",
+            "--window",
+            "2.5",
+            "--scale",
+            "jinjin_dan_regular",
+            "--level-min",
+            "3",
+            "--level-max",
+            "7.5",
+        ])
+        .unwrap();
+        let Command::Label(args) = cli.command else {
+            panic!("{:?}", cli.command);
+        };
+        let s = args.session;
+        assert_eq!((s.seed, s.window_ms), (Some(u64::MAX), 2_500));
+        assert_eq!(s.scale.as_deref(), Some("jinjin_dan_regular"));
+        assert_eq!((s.level_min, s.level_max), (Some(3.0), Some(7.5)));
+        for bad in ["0", "x", "-1"] {
+            assert!(
+                Cli::try_parse_from(["wolluf", "label", "--window", bad]).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn label_subcommands() {
+        let cli = Cli::try_parse_from(["wolluf", "label", "stats", "--json"]).unwrap();
+        assert!(cli.json);
+        let Command::Label(args) = cli.command else {
+            panic!("{:?}", cli.command);
+        };
+        assert!(matches!(args.command, Some(LabelCmd::Stats)));
+
+        let cli = Cli::try_parse_from(["wolluf", "label", "export"]).unwrap();
+        let Command::Label(LabelArgs {
+            command: Some(LabelCmd::Export { out }),
+            ..
+        }) = cli.command
+        else {
+            panic!("{:?}", cli.command);
+        };
+        assert_eq!(out, PathBuf::from("fixtures/labels/gold-7k.jsonl"));
+        let cli = Cli::try_parse_from(["wolluf", "label", "export", "--out", "/x.jsonl"]).unwrap();
+        let Command::Label(LabelArgs {
+            command: Some(LabelCmd::Export { out }),
+            ..
+        }) = cli.command
+        else {
+            panic!("{:?}", cli.command);
+        };
+        assert_eq!(out, PathBuf::from("/x.jsonl"));
+        assert!(Cli::try_parse_from(["wolluf", "label", "--seed", "1", "stats"]).is_err());
     }
 
     #[test]

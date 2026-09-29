@@ -25,6 +25,10 @@ pub enum CoreError {
     DuplicateSection(String),
     #[error("unknown error code {0:?}")]
     UnknownErrorCode(String),
+    #[error("anchor window [{t0_us}, {t1_us}) is empty or backwards")]
+    InvalidAnchorWindow { t0_us: i64, t1_us: i64 },
+    #[error("anchor has no columns")]
+    EmptyAnchorColumns,
 }
 
 stable_str_enum! {

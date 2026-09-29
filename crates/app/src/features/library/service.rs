@@ -12,7 +12,7 @@ use wolluf_engine::rows_blob::decode_rows;
 use wolluf_engine::stage::chart_parse::parse_chart;
 use wolluf_source_osu::songs::read_chart_verified;
 use wolluf_store::repo::cache::{
-    CatalogChart, ChartLabel, ChartParsed, LabelFilter, catalog_chart, chart_label as label_repo,
+    CatalogChart, ChartLabel, LabelFilter, ParsedSummary, catalog_chart, chart_label as label_repo,
     chart_parsed,
 };
 use wolluf_store::{Conn, DbHandle, StoreError};
@@ -25,6 +25,12 @@ use crate::events::AppEvent;
 use crate::jobs::dto::{JobDto, JobId};
 
 const MS_PER_SECOND: f64 = 1_000.0;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartRows {
+    pub keymode: Keymode,
+    pub times: Vec<TimeUs>,
+}
 
 pub struct LibraryService<'a> {
     ctx: &'a AppContext,
@@ -141,6 +147,30 @@ impl<'a> LibraryService<'a> {
         .await
     }
 
+    /// Every parsed chart of a keymode with its labels, in md5 order: `list` without paging,
+    /// read from the stored summaries so no blob is loaded.
+    pub async fn overview(&self, keymode: Keymode) -> Result<Vec<LibraryChartDto>, AppError> {
+        self.blocking(move |dbs, keys| Ok(dbs.cache.read(|c| overview(c, keys, keymode))?))
+            .await
+    }
+
+    /// The chart's keymode and the ascending times of its rows (one per distinct event time).
+    pub async fn row_times(&self, md5: ChartMd5) -> Result<ChartRows, AppError> {
+        self.blocking(move |dbs, keys| {
+            let parsed = dbs
+                .cache
+                .read(|c| chart_parsed::get(c, md5, keys.parse))?
+                .ok_or_else(|| not_found(md5))?;
+            let chart = decode_rows(&parsed.rows_blob)
+                .map_err(|e| AppError::internal(format!("rows blob of {md5}: {e}")))?;
+            Ok(ChartRows {
+                keymode: chart.keymode(),
+                times: chart.rows().iter().map(|r| r.t).collect(),
+            })
+        })
+        .await
+    }
+
     /// Every label row, files or not: labels come from osu!.db names alone.
     pub async fn counts_by_scale(&self) -> Result<Vec<ScaleCountDto>, AppError> {
         self.blocking(|dbs, keys| {
@@ -186,7 +216,7 @@ fn label_dto(l: ChartLabel) -> ChartLabelDto {
 
 /// From the stored columns, so a listing never decodes a blob. `length_ms` is floored, so the
 /// last digits may differ from the engine's summary.
-fn nps(p: &ChartParsed) -> f64 {
+fn nps(p: &ParsedSummary) -> f64 {
     if p.length_ms == 0 {
         0.0
     } else {
@@ -196,7 +226,7 @@ fn nps(p: &ChartParsed) -> f64 {
 
 fn chart_dto(
     chart: &CatalogChart,
-    parsed: &ChartParsed,
+    parsed: &ParsedSummary,
     labels: Vec<ChartLabel>,
 ) -> LibraryChartDto {
     LibraryChartDto {
@@ -278,9 +308,38 @@ fn list(
             continue;
         };
         let labels = label_repo::list_for(conn, md5, keys.label)?;
-        page.push(chart_dto(chart, &parsed, labels));
+        page.push(chart_dto(chart, &parsed.summary(), labels));
     }
     Ok(page)
+}
+
+fn overview(
+    conn: Conn<'_>,
+    keys: Keys,
+    keymode: Keymode,
+) -> Result<Vec<LibraryChartDto>, StoreError> {
+    let catalog: BTreeMap<ChartMd5, CatalogChart> =
+        catalog_chart::list_by_keymode(conn, keymode.columns())?
+            .into_iter()
+            .map(|c| (c.md5, c))
+            .collect();
+    let mut labels: BTreeMap<ChartMd5, Vec<ChartLabel>> = BTreeMap::new();
+    for (md5, label) in
+        label_repo::list_filtered(conn, keys.label, &LabelFilter::default(), u32::MAX)?
+    {
+        labels.entry(md5).or_default().push(label);
+    }
+    Ok(chart_parsed::summaries(conn, keys.parse)?
+        .into_iter()
+        .filter_map(|p| {
+            let chart = catalog.get(&p.md5)?;
+            Some(chart_dto(
+                chart,
+                &p,
+                labels.remove(&p.md5).unwrap_or_default(),
+            ))
+        })
+        .collect())
 }
 
 fn get(dbs: &Dbs, keys: Keys, md5: ChartMd5) -> Result<ChartDetailDto, AppError> {
@@ -296,7 +355,7 @@ fn get(dbs: &Dbs, keys: Keys, md5: ChartMd5) -> Result<ChartDetailDto, AppError>
     };
     Ok(ChartDetailDto {
         diagnostics: diagnostics(dbs, &chart)?,
-        chart: chart_dto(&chart, &parsed, labels),
+        chart: chart_dto(&chart, &parsed.summary(), labels),
     })
 }
 
@@ -546,6 +605,43 @@ mod tests {
         let empty_window = svc.render(&map.md5, 2_000, 2_000, None).await;
         assert_eq!(empty_window.unwrap_err().code, ErrorCode::InvalidInput);
         let unknown = svc.render(&"0".repeat(32), 0, 1, None).await;
+        assert_eq!(unknown.unwrap_err().code, ErrorCode::NotFound);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn overview_lists_every_parsed_chart_with_labels() {
+        let lib = library();
+        let (f, _) = synced(&lib.maps(), &[]).await;
+        let svc = f.ctx.library();
+        let overview = svc.overview(Keymode::K7).await.unwrap();
+        let listed = svc
+            .list(LibraryFilterDto {
+                limit: u32::MAX,
+                ..filter()
+            })
+            .await
+            .unwrap();
+        assert_eq!(overview, listed, "same rows as an unbounded listing");
+        assert!(svc.overview(Keymode::K4).await.unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn row_times_are_the_chart_rows() {
+        let chart = osu_text(7, "rows", &[(0, 1_000), (6, 1_250)], &[(3, 1_000, 1_500)]);
+        let map = Map::new("rows", 7, chart);
+        let (f, _) = synced(std::slice::from_ref(&map), &[]).await;
+        let md5: ChartMd5 = map.md5.parse().unwrap();
+        let rows = f.ctx.library().row_times(md5).await.unwrap();
+        assert_eq!(rows.keymode, Keymode::K7);
+        assert_eq!(
+            rows.times,
+            [
+                TimeUs::from_ms(1_000),
+                TimeUs::from_ms(1_250),
+                TimeUs::from_ms(1_500)
+            ]
+        );
+        let unknown = f.ctx.library().row_times(ChartMd5([0; 16])).await;
         assert_eq!(unknown.unwrap_err().code, ErrorCode::NotFound);
     }
 

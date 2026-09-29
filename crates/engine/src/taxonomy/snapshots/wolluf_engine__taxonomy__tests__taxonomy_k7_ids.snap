@@ -1,0 +1,29 @@
+---
+source: crates/engine/src/taxonomy/tests.rs
+expression: "ids.join(\"\\n\")"
+---
+regular.jack.minijack
+regular.jack.chordjack
+regular.jack.longjack
+regular.jack.anchor
+regular.tech.irregular
+regular.tech.hand_imbalance
+regular.tech.thumb
+regular.speed.burst
+regular.stream.single
+regular.stream.jumpstream
+regular.stream.handstream
+regular.stream.chordstream_light
+regular.stream.chordstream_dense
+regular.stream.roll
+regular.stream.trill
+regular.stream.jumptrill
+regular.stream.split_trill
+regular.stream.bracket
+regular.stream.chordbracket
+ln.general.density
+ln.general.chord
+ln.tech.hybrid
+ln.tech.shield
+ln.inverse.gap
+ln.release.timing

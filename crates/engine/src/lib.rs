@@ -6,5 +6,6 @@ pub mod profile;
 pub mod render;
 pub mod rows_blob;
 pub mod stage;
+pub mod taxonomy;
 
 pub use error::EngineError;
