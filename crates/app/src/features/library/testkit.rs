@@ -45,6 +45,12 @@ pub(crate) fn taps_7k(title: &str, n: u8) -> Vec<u8> {
     osu_text(7, title, &taps, &[])
 }
 
+/// Six presses in column 0, 100 ms apart from 1 s: one `regular.jack.longjack` segment.
+pub(crate) fn jacks_7k(title: &str) -> Vec<u8> {
+    let taps: Vec<(u8, i32)> = (0..6).map(|i| (0, 1_000 + i * 100)).collect();
+    osu_text(7, title, &taps, &[])
+}
+
 /// One osu!.db row and what sits in `Songs/` for it.
 #[derive(Debug, Clone)]
 pub(crate) struct Map {
@@ -77,6 +83,10 @@ impl Map {
 
     pub(crate) fn k7(title: &str) -> Self {
         Self::new(title, 7, taps_7k(title, 8))
+    }
+
+    pub(crate) fn jacks(title: &str) -> Self {
+        Self::new(title, 7, jacks_7k(title))
     }
 
     pub(crate) fn named(mut self, folder: &str, version: &str) -> Self {

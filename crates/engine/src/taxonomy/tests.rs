@@ -108,3 +108,20 @@ fn taxonomy_vocabulary_decisions() {
         assert!(desc(id).contains("more than four"), "{id}");
     }
 }
+
+/// The patterns crate cannot depend on engine (D1), so it repeats the pattern → axis mapping.
+#[test]
+fn patterns_axis_table_matches_the_taxonomy() {
+    let ours: Vec<(&str, &str)> = k7()
+        .iter()
+        .map(|p| (p.id.as_str(), p.axis.as_str()))
+        .collect();
+    let mut theirs: Vec<(&str, &str)> = wolluf_patterns::axes::K7
+        .iter()
+        .map(|(p, a)| (p.as_str(), a.as_str()))
+        .collect();
+    let mut ours_sorted = ours.clone();
+    ours_sorted.sort_unstable();
+    theirs.sort_unstable();
+    assert_eq!(ours_sorted, theirs);
+}

@@ -5,6 +5,7 @@ pub mod chart_label;
 pub mod chart_parse;
 #[cfg(any(test, feature = "test-support"))]
 mod golden;
+pub mod patterns;
 
 use wolluf_core::StageId;
 
@@ -23,6 +24,10 @@ pub const REGISTERED: &[StageInfo] = &[
     StageInfo {
         id: chart_parse::STAGE,
         version: chart_parse::VERSION,
+    },
+    StageInfo {
+        id: patterns::STAGE,
+        version: patterns::VERSION,
     },
 ];
 
@@ -52,6 +57,11 @@ pub fn goldens() -> Vec<StageGolden> {
             version: chart_parse::VERSION,
             golden: golden::chart_parse(),
         },
+        StageGolden {
+            id: patterns::STAGE,
+            version: patterns::VERSION,
+            golden: golden::patterns(),
+        },
     ]
 }
 
@@ -65,7 +75,10 @@ mod tests {
             .iter()
             .map(|s| (s.id.as_str(), s.version))
             .collect();
-        assert_eq!(ids, [("chart_label", 1), ("chart_parse", 1)]);
+        assert_eq!(
+            ids,
+            [("chart_label", 1), ("chart_parse", 1), ("patterns", 1)]
+        );
     }
 
     #[test]
@@ -92,5 +105,6 @@ mod tests {
             );
         }
         assert_ne!(first[0].golden, first[1].golden);
+        assert_ne!(first[1].golden, first[2].golden);
     }
 }

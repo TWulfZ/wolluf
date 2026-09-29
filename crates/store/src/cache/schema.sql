@@ -93,3 +93,22 @@ CREATE TABLE chart_label (
 
 -- The primary key already serves per-md5 lookups; every read filters by vkey first (D15).
 CREATE INDEX chart_label_scale_level ON chart_label (vkey, scale, level_ord);
+
+-- Pattern segments per `patterns` key (ADR 0017 ids): at most one primary pattern per instant.
+-- `idx` is the segment's rank in time order within its chart. `cols` is a column bitmask.
+CREATE TABLE segment (
+    md5            TEXT NOT NULL,
+    vkey           BLOB NOT NULL CHECK (length(vkey) = 32),
+    idx            INTEGER NOT NULL CHECK (idx >= 0),
+    t0_us          INTEGER NOT NULL,
+    t1_us          INTEGER NOT NULL CHECK (t1_us >= t0_us),
+    cols           INTEGER NOT NULL CHECK (cols BETWEEN 0 AND 65535),
+    axis_id        TEXT NOT NULL,
+    pattern_id     TEXT NOT NULL,
+    secondary_json TEXT NOT NULL CHECK (json_valid(secondary_json)),
+    purity         INTEGER NOT NULL CHECK (purity BETWEEN 0 AND 1000),
+    strength       INTEGER NOT NULL CHECK (strength BETWEEN 0 AND 1000),
+    PRIMARY KEY (md5, vkey, idx)
+) STRICT;
+
+CREATE INDEX segment_pattern ON segment (vkey, pattern_id);

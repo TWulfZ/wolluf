@@ -50,7 +50,7 @@ Gates, from the repo root (per change, the ones `wolluf-odd` §6 marks as applic
 Corpus harnesses (`#[ignore]`, read-only; do not run while osu! is running, the tests fail if the corpus changes):
 - All: `WOLLUF_CORPUS="/mnt/e/Games/osu!" cargo nextest run --workspace --run-ignored only`
 - Codecs, with the AC15 speed budgets (release only): `WOLLUF_CORPUS="/mnt/e/Games/osu!" cargo nextest run -p wolluf-source-osu --all-features --release --run-ignored only`. `WOLLUF_PYTHON` overrides the `python3` used for the oracle.
-- Sync, identity and `.osg` on the pilot: `WOLLUF_CORPUS="/mnt/e/Games/osu!" cargo nextest run -p wolluf-app --run-ignored only` (filter with `-E 'test(corpus_sync_pilot)'`, `players_corpus_selection`, `osg_corpus_invariants`, `corpus_library_index`)
+- Sync, identity and `.osg` on the pilot: `WOLLUF_CORPUS="/mnt/e/Games/osu!" cargo nextest run -p wolluf-app --run-ignored only` (filter with `-E 'test(corpus_sync_pilot)'`, `players_corpus_selection`, `osg_corpus_invariants`, `corpus_library_index`, `corpus_patterns`)
 
 Fixtures (deterministic; a second run must leave `git diff fixtures/` empty):
 - `cargo xtask fixtures dbs --corpus "/mnt/e/Games/osu!"` (anonymized, minimized DBs)
@@ -60,7 +60,7 @@ CLI (`cargo run -p wolluf-cli -- …`, binary `wolluf`; global `--data-dir <DIR>
 - `wolluf setup detect`, `wolluf setup set <path>`, `wolluf setup status`
 - `wolluf sync` (Ctrl-C cancels, exit 130), `wolluf players list`, `wolluf jobs list [--limit N]`
 - `wolluf library index` (also chained after `sync`), `wolluf library list [--keys N] [--scale S] [--level-min X] [--level-max Y] [--source SRC] [--text T] [--limit N] [--offset N]`, `wolluf library scales`
-- `wolluf chart show <md5> [--from <s|mm:ss>] [--to <s|mm:ss>] [--layout <preset id>]` (ASCII playfield, earliest row at the bottom; default window 20 s), `wolluf chart info <md5>`
+- `wolluf chart show <md5> [--from <s|mm:ss>] [--to <s|mm:ss>] [--layout <preset id>] [--segments]` (ASCII playfield, earliest row at the bottom; default window 20 s; `--segments` marks engine pattern segments), `wolluf chart info <md5>`, `wolluf library patterns`
 - `wolluf label [--seed N] [--window SECS] [--keys N] [--scale S] [--level-min X] [--level-max Y]` (blind gold-set labelling REPL: pattern keys, `x` no pattern, `s` skip, `u` undo, `m`/`?` flags, `tl`/`tr` thumb side, `w+`/`w-`/`n`/`p` reshape, `q` quit), `wolluf label stats [--json]`, `wolluf label export [--out PATH]` (default `fixtures/labels/gold-7k.jsonl`)
 - `wolluf osg dump <file> [--format table|json|csv] [--events] [--limit N]`
 - `wolluf osg survey --corpus <root> [--json] [--strict] [--max-files N]` (opens no data dir; use `--release` for timing)

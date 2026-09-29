@@ -326,7 +326,7 @@ catalog_chart(md5, keymode, title, artist, version, creator, set_id, beatmap_id,
 chart_label(md5, source [bms_st|bms_oj|o2jam|komeijidove|jinjin|...], level_ord, level_text, skill_tag NULL)
 chart_parsed(md5, vkey, rows_blob, n_notes, n_ln, ln_ratio)
 label_override(md5, anchor, action [assert|deny|split], pattern_id NULL)   -- materialized from feedback_event
-segment(md5, vkey, idx, t0_us, t1_us, cols, axis_id, pattern_id, purity, overridden)
+segment(md5, vkey, idx, t0_us, t1_us, cols, axis_id, pattern_id, secondary_json, purity, strength)  -- one primary per row; losing rules and tag-only rules are secondary; `overridden` arrives with label overrides (deliverable 5)
 segment_difficulty(md5, vkey, idx, rate_milli, d_mean, d_sd)           -- 1.0x for all, played/drilled rates on demand
 chart_axis_index(md5, vkey, rate_milli, axis_id, d_peak, d_p75, coverage_us, purity_w)  -- recommender index (0.80–1.50 × 0.05)
 replay_input(play_id, vkey, blob)                                      -- decoded key events (.osr/.osg decoder output)

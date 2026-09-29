@@ -8,6 +8,10 @@ use wolluf_chart::testkit::OsuText;
 use wolluf_chart::{Chart, ChartError, TimingKind, chart};
 use wolluf_core::TimeUs;
 
+use wolluf_chart::Layout;
+use wolluf_chart::testkit::chart_from_rows;
+use wolluf_patterns::PatternsError;
+
 use super::chart_parse::{parse_chart, summarize};
 use crate::error::EngineError;
 use crate::labels::{LabelInput, extract_labels};
@@ -70,6 +74,184 @@ fn chart_label_dump() -> String {
     dump
 }
 
+pub(super) fn patterns() -> String {
+    hex(&patterns_dump())
+}
+
+/// One line per segment, every field spelled out; ids are the persisted stable strings.
+fn patterns_dump() -> String {
+    let mut dump = String::new();
+    for (name, chart, layouts) in patterns_fixtures() {
+        for layout_id in layouts {
+            let _ = writeln!(dump, "fixture {name} layout {layout_id}");
+            let layout = Layout::by_id(layout_id);
+            let (Some(chart), Some(layout)) = (&chart, layout) else {
+                let _ = writeln!(dump, "error fixture");
+                continue;
+            };
+            match super::patterns::run(chart, &layout) {
+                Ok(segments) => {
+                    for (i, s) in segments.iter().enumerate() {
+                        let secondary: Vec<&str> = s.secondary.iter().map(|p| p.as_str()).collect();
+                        let _ = writeln!(
+                            dump,
+                            "segment {i} {} {} cols={} {} {} purity={} strength={} secondary={}",
+                            s.t0.0,
+                            s.t1.0,
+                            s.cols.bits(),
+                            s.primary.as_str(),
+                            s.axis.as_str(),
+                            s.purity,
+                            s.strength,
+                            secondary.join(",")
+                        );
+                    }
+                }
+                Err(err) => {
+                    let _ = writeln!(dump, "error {}", error_id(&err));
+                }
+            }
+        }
+    }
+    dump
+}
+
+const PATTERNS_STEP_MS: i32 = 100;
+
+const RIGHT_AND_LEFT_THUMB: [&str; 2] = ["k7.313_right_thumb", "k7.313_left_thumb"];
+
+fn rows_chart(rows: &[&str]) -> Option<Chart> {
+    chart_from_rows(0, PATTERNS_STEP_MS, rows).ok()
+}
+
+/// `cycle` repeated to `n` rows, then two empty rows so the next section is not the same stream.
+fn section(rows: &mut Vec<&'static str>, cycle: &[&'static str], n: usize) {
+    rows.extend(cycle.iter().copied().cycle().take(n));
+    rows.extend([".......", "......."]);
+}
+
+/// Together the fixtures put every ADR 0017 pattern id in the dump, as a primary or a tag
+/// (`patterns_golden_covers_every_pattern_id`): rice, jacks, streams, LN sections, off-grid
+/// timing, under both 3|1+3 thumb sides (the thumb column changes hand-dependent rules), plus
+/// a keymode without an axis table.
+fn patterns_fixtures() -> Vec<(&'static str, Option<Chart>, Vec<&'static str>)> {
+    let jumpstream = [
+        "x......", "..xx...", "x......", ".x..x..", "..x....", "x....x.", "...x...", ".x..x..",
+    ];
+    let hybrid = [
+        "x.....[", "..x...|", ".x....|", "...x..]", "..x...[", "....x.|", "...x..|", ".x....]",
+    ];
+    let mut mixed: Vec<&'static str> = Vec::new();
+    for _ in 0..4 {
+        mixed.extend(jumpstream);
+    }
+    mixed.extend([
+        ".......", ".......", "xxx....", "xxx....", "xx.x...", "xx.x...", "x.xx...",
+    ]);
+    mixed.extend([".......", ".......", "......."]);
+    for block in 0..4 {
+        mixed.push("[[[[[[[");
+        mixed.extend(["|||||||"; 5]);
+        mixed.push("]]]]]]]");
+        if block < 3 {
+            mixed.push(".......");
+        }
+    }
+    mixed.push(".......");
+    for _ in 0..3 {
+        mixed.extend(hybrid);
+    }
+
+    let mut streams: Vec<&'static str> = Vec::new();
+    let zigzag = [
+        "x......", ".x.....", "..x....", "...x...", "....x..", ".....x.", "......x", ".....x.",
+        "....x..", "...x...", "..x....", ".x.....",
+    ];
+    section(&mut streams, &zigzag, 24);
+    section(
+        &mut streams,
+        &[
+            "xxx....", "....x..", "...x.xx", ".x.....", "x.x.x..", "......x",
+        ],
+        24,
+    );
+    section(
+        &mut streams,
+        &[
+            "xx.xx..", "..x..x.", "xx..x.x", "..xx...", "xx...xx", "..x....",
+        ],
+        24,
+    );
+    // One note per hand per row, so no hand can bracket.
+    section(
+        &mut streams,
+        &["x...x..", ".x...x.", "..x...x", ".x...x."],
+        24,
+    );
+    section(&mut streams, &["xx.....", "..xx..."], 24);
+    section(&mut streams, &["x.x....", ".x....."], 24);
+
+    let mut ln: Vec<&'static str> = Vec::new();
+    for _ in 0..4 {
+        ln.extend([
+            "[[[[...", "||||...", "]|||...", ".]||...", "..]|...", "...]...", ".......",
+        ]);
+    }
+    ln.extend([".......", "......."]);
+    ln.extend([
+        "x......", "[......", "|x.....", "][.....", ".|x....", ".][....", "..|x...", "..][...",
+        "...|x..", "...][..", "....|x.", "....][.", ".....|x", ".....][", "......]",
+    ]);
+
+    let thumb_trill: Vec<&'static str> = ["...x...", "....x.."]
+        .iter()
+        .copied()
+        .cycle()
+        .take(24)
+        .collect();
+    vec![
+        (
+            "k7_mixed",
+            rows_chart(&mixed),
+            RIGHT_AND_LEFT_THUMB.to_vec(),
+        ),
+        (
+            "k7_streams",
+            rows_chart(&streams),
+            vec!["k7.313_right_thumb"],
+        ),
+        (
+            "k7_ln_release_shield",
+            rows_chart(&ln),
+            vec!["k7.313_right_thumb"],
+        ),
+        ("k7_off_grid", off_grid(), vec!["k7.313_right_thumb"]),
+        (
+            "k7_thumb_trill",
+            rows_chart(&thumb_trill),
+            RIGHT_AND_LEFT_THUMB.to_vec(),
+        ),
+        (
+            "k4_generic",
+            rows_chart(&["x...", ".x..", "..x.", "...x"]),
+            vec!["k4.generic"],
+        ),
+    ]
+}
+
+/// A single-note stream alternating 1/4 and 1/3 gaps of a 400 ms beat: the DSL draws no red
+/// lines, so this one goes through the decoder.
+fn off_grid() -> Option<Chart> {
+    let mut text = OsuText::mania(7).timing_line("0,400,4,1,0,100,1,0");
+    let cols = [0, 2, 1, 3];
+    let mut t = 0;
+    for i in 0..22 {
+        text = text.tap(cols[i % cols.len()], TimeUs::from_ms(t));
+        t += if i % 2 == 0 { 100 } else { 133 };
+    }
+    parse_chart(text.build().as_bytes()).ok().map(|p| p.chart)
+}
+
 fn hex(dump: &str) -> String {
     blake3::hash(dump.as_bytes()).to_hex().to_string()
 }
@@ -84,6 +266,9 @@ fn error_id(err: &EngineError) -> String {
         EngineError::EmptyRowsBlob => "empty_rows_blob".to_owned(),
         EngineError::UnsupportedRowsFormat(v) => format!("unsupported_rows_format {v}"),
         EngineError::CorruptRowsBlob(_) => "corrupt_rows_blob".to_owned(),
+        EngineError::Patterns(PatternsError::KeymodeMismatch { chart, layout }) => {
+            format!("keymode_mismatch {chart} {layout}")
+        }
     }
 }
 
@@ -282,6 +467,56 @@ mod tests {
         assert!(
             labels.contains("label komeijidove_practice|jinjin_dan|"),
             "{labels}"
+        );
+    }
+
+    #[test]
+    fn patterns_golden_covers_every_pattern_id() {
+        let dump = patterns_dump();
+        let mut seen = std::collections::BTreeSet::new();
+        for line in dump.lines().filter(|l| l.starts_with("segment ")) {
+            let fields: Vec<&str> = line.split(' ').collect();
+            seen.insert(fields[5].to_owned());
+            let secondary = line.rsplit_once("secondary=").unwrap().1;
+            seen.extend(
+                secondary
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned),
+            );
+        }
+        let missing: Vec<&str> = wolluf_patterns::axes::K7
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .filter(|p| !seen.contains(*p))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "never in the golden: {missing:?}\n{dump}"
+        );
+    }
+
+    #[test]
+    fn patterns_golden_spells_out_every_segment_field() {
+        let dump = patterns_dump();
+        for expected in [
+            "fixture k7_mixed layout k7.313_right_thumb\n",
+            "fixture k7_mixed layout k7.313_left_thumb\n",
+            "fixture k7_thumb_trill layout k7.313_right_thumb\nsegment 0 0 2300000 cols=24 regular.stream.trill ",
+            "fixture k7_thumb_trill layout k7.313_left_thumb\nsegment 0 0 2300000 cols=24 regular.stream.split_trill ",
+            " regular.stream.jumpstream 7k.regular.stream ",
+            " ln.inverse.gap 7k.ln.inverse ",
+            " purity=",
+            " strength=",
+            " secondary=",
+        ] {
+            assert!(dump.contains(expected), "missing {expected:?} in\n{dump}");
+        }
+        assert!(!dump.contains("error"), "{dump}");
+        // No axis table for 4K yet, so no segments.
+        assert!(
+            dump.ends_with("fixture k4_generic layout k4.generic\n"),
+            "{dump}"
         );
     }
 }

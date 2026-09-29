@@ -53,6 +53,39 @@ pub struct ChartDetailDto {
     pub chart: LibraryChartDto,
     /// Decoder warnings of the `.osu` as it is now; `None` when the file is unavailable.
     pub diagnostics: Option<u32>,
+    pub segments: Vec<SegmentDto>,
+}
+
+/// One pattern segment under the keymode profile's default layout, rows `t0Ms..=t1Ms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SegmentDto {
+    pub t0_ms: i32,
+    pub t1_ms: i32,
+    /// Bit `i` is column `i`.
+    pub cols: u16,
+    pub pattern_id: String,
+    /// The taxonomy's short key.
+    pub key: String,
+    pub axis_id: String,
+    pub secondary: Vec<String>,
+    /// Permille.
+    pub purity: u16,
+    /// Permille.
+    pub strength: u16,
+}
+
+/// Primary segments of one pattern over the library.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternCountDto {
+    pub keymode: u8,
+    pub pattern_id: String,
+    pub key: String,
+    pub axis_id: String,
+    pub segments: u32,
+    pub charts: u32,
+    pub total_s: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

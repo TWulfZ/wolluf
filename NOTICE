@@ -3,7 +3,8 @@ Copyright (c) 2026 TWulfZ
 
 Licensed under the MIT License; see LICENSE.
 
-Third-party code included: none yet.
+Third-party code included:
+- Interlude (YAVSRG, commit d41fc21623d45a94bd98e8207a0674c1407ea245), prelude/src/Calculator/Patterns/Primitives.fs (direction, roll and jack primitives) and Patterns.fs (default rule thresholds), MIT, Copyright (c) 2024 percyqaz. Ported to crates/patterns/src/view.rs and crates/patterns/src/params.rs.
 
 Ported code is attributed here in the same commit that brings it in
 (docs/conventions.md, "Licensing and NOTICE"; ADR 0008). Each entry names

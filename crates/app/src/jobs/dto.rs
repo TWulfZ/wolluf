@@ -111,6 +111,8 @@ pub struct IndexLibrarySummaryDto {
     /// Missing from `Songs/` or edited since osu!.db recorded its md5; retried next run.
     pub skipped_unavailable: u32,
     pub labels_written: u32,
+    /// Pattern segments stored this run (`patterns` stage).
+    pub segments_written: u32,
     pub failed_items: u32,
 }
 
@@ -180,7 +182,7 @@ mod tests {
         });
         assert_eq!(
             serde_json::to_string(&summary).unwrap(),
-            r#"{"kind":"index_library","counters":{"chartsTotal":3,"parsedNew":2,"skippedMemoized":0,"skippedUnavailable":1,"labelsWritten":0,"failedItems":0}}"#
+            r#"{"kind":"index_library","counters":{"chartsTotal":3,"parsedNew":2,"skippedMemoized":0,"skippedUnavailable":1,"labelsWritten":0,"segmentsWritten":0,"failedItems":0}}"#
         );
         assert_eq!(
             serde_json::to_string(&JobStageDto::Index).unwrap(),

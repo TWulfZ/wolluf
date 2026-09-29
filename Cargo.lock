@@ -6123,7 +6123,22 @@ dependencies = [
  "thiserror 2.0.21",
  "wolluf-chart",
  "wolluf-core",
+ "wolluf-patterns",
  "zstd",
+]
+
+[[package]]
+name = "wolluf-patterns"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "insta",
+ "postcard",
+ "proptest",
+ "serde",
+ "thiserror 2.0.21",
+ "wolluf-chart",
+ "wolluf-core",
 ]
 
 [[package]]

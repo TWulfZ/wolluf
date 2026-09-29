@@ -412,7 +412,8 @@ async fn draw(
     } = view;
     let field = ctx
         .library()
-        .render(&anchor.md5, anchor.t0_ms, anchor.t1_ms, None)
+        // Never with segments: the gold set is labelled blind to the engine's guesses.
+        .render(&anchor.md5, anchor.t0_ms, anchor.t1_ms, None, false)
         .await?;
     writeln!(
         out,
@@ -444,7 +445,7 @@ async fn draw(
 }
 
 /// `mm:ss.mmm`.
-fn clock(ms: i32) -> String {
+pub(crate) fn clock(ms: i32) -> String {
     let sign = if ms < 0 { "-" } else { "" };
     let ms = ms.unsigned_abs();
     let per_minute = (MS_PER_SECOND * SECONDS_PER_MINUTE).unsigned_abs();

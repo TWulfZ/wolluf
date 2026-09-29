@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use wolluf_core::{ChartMd5, ErrorCode, StageId, UnixUs, VersionKey};
+use wolluf_core::{AxisId, ChartMd5, ErrorCode, PatternId, StageId, TimeUs, UnixUs, VersionKey};
 
 use rusqlite::{OptionalExtension, Row};
 
@@ -154,6 +154,30 @@ pub struct LabelFilter {
 pub struct LabelCount {
     pub rows: u64,
     pub charts: u64,
+}
+
+/// One pattern segment of a chart; the chart and key come from the call that stores it. Ids are
+/// the persisted ADR 0017 strings, so the store needs no pattern types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SegmentRow {
+    pub t0: TimeUs,
+    pub t1: TimeUs,
+    pub cols: u16,
+    pub axis: AxisId,
+    pub pattern: PatternId,
+    pub secondary: Vec<PatternId>,
+    /// Permille.
+    pub purity: u16,
+    /// Permille.
+    pub strength: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PatternCount {
+    pub segments: u64,
+    pub charts: u64,
+    /// Summed `t1 - t0` of the segments.
+    pub total_us: i64,
 }
 
 fn ms(t: UnixUs) -> String {
@@ -686,6 +710,133 @@ pub mod chart_label {
     }
 }
 
+pub mod segment {
+    use super::*;
+
+    const COLUMNS: &str =
+        "t0_us, t1_us, cols, axis_id, pattern_id, secondary_json, purity, strength";
+
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<SegmentRow> {
+        let secondary: Vec<String> = json_value(row, 5)?;
+        let secondary = secondary
+            .iter()
+            .map(|p| PatternId::parse(p))
+            .collect::<Result<_, _>>()
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Text,
+                    Box::new(StoreError::InvalidData(e.to_string())),
+                )
+            })?;
+        Ok(SegmentRow {
+            t0: TimeUs(row.get(0)?),
+            t1: TimeUs(row.get(1)?),
+            cols: int(row, 2)?,
+            axis: parsed(row, 3, AxisId::parse)?,
+            pattern: parsed(row, 4, PatternId::parse)?,
+            secondary,
+            purity: int(row, 6)?,
+            strength: int(row, 7)?,
+        })
+    }
+
+    /// Replaces the chart's segments under `vkey`, numbered in the given (time) order; segments
+    /// under other keys stay until `prune_except`. `secondary` is stored sorted and deduplicated
+    /// so equal inputs store equal text.
+    pub fn replace_for(
+        tx: &Tx<'_>,
+        md5: ChartMd5,
+        vkey: VersionKey,
+        segments: &[SegmentRow],
+    ) -> Result<(), StoreError> {
+        debug_assert!(
+            segments.windows(2).all(|w| w[0].t0 <= w[1].t0),
+            "segments must come in time order"
+        );
+        let md5 = md5.to_string();
+        tx.0.prepare_cached("DELETE FROM segment WHERE md5 = ?1 AND vkey = ?2")?
+            .execute((&md5, vkey.0))?;
+        let mut insert = tx.0.prepare_cached(&format!(
+            "INSERT INTO segment (md5, vkey, idx, {COLUMNS})
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+        ))?;
+        for (idx, s) in segments.iter().enumerate() {
+            let mut secondary: Vec<&str> = s.secondary.iter().map(|p| p.as_str()).collect();
+            secondary.sort_unstable();
+            secondary.dedup();
+            let secondary = serde_json::to_string(&secondary)
+                .map_err(|e| StoreError::InvalidData(format!("segment secondary: {e}")))?;
+            insert.execute(rusqlite::params![
+                md5,
+                vkey.0,
+                i64::try_from(idx).map_err(|_| StoreError::InvalidData("segment idx".into()))?,
+                s.t0.0,
+                s.t1.0,
+                s.cols,
+                s.axis.as_str(),
+                s.pattern.as_str(),
+                secondary,
+                s.purity,
+                s.strength,
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// In stored order.
+    pub fn list_for(
+        conn: Conn<'_>,
+        md5: ChartMd5,
+        vkey: VersionKey,
+    ) -> Result<Vec<SegmentRow>, StoreError> {
+        let mut stmt = conn.0.prepare_cached(&format!(
+            "SELECT {COLUMNS} FROM segment WHERE md5 = ?1 AND vkey = ?2 ORDER BY idx"
+        ))?;
+        let rows = stmt
+            .query_map((md5.to_string(), vkey.0), from_row)?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
+    /// Primary patterns only; secondary tags are not counted.
+    pub fn counts_by_pattern(
+        conn: Conn<'_>,
+        vkey: VersionKey,
+    ) -> Result<BTreeMap<PatternId, PatternCount>, StoreError> {
+        let mut stmt = conn.0.prepare_cached(
+            "SELECT pattern_id, count(*), count(DISTINCT md5), sum(t1_us - t0_us) FROM segment
+             WHERE vkey = ?1 GROUP BY pattern_id",
+        )?;
+        let rows = stmt
+            .query_map([vkey.0], |row| {
+                Ok((
+                    parsed(row, 0, PatternId::parse)?,
+                    PatternCount {
+                        segments: int(row, 1)?,
+                        charts: int(row, 2)?,
+                        total_us: row.get(3)?,
+                    },
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
+    /// Distinct charts with at least one segment.
+    pub fn count_charts(conn: Conn<'_>, vkey: VersionKey) -> Result<u64, StoreError> {
+        Ok(conn
+            .0
+            .prepare_cached("SELECT count(DISTINCT md5) FROM segment WHERE vkey = ?1")?
+            .query_row([vkey.0], |r| int(r, 0))?)
+    }
+
+    /// GC hook (§5.5 keeps recent keys); returns the number of rows deleted.
+    pub fn prune_except(tx: &Tx<'_>, keep: &[VersionKey]) -> Result<u64, StoreError> {
+        prune_vkeys_except(tx, "segment", keep)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -880,6 +1031,127 @@ mod tests {
             skill_tag: None,
             is_variant: false,
         }
+    }
+
+    fn seg(t0: i64, t1: i64, pattern: &str, secondary: &[&str]) -> SegmentRow {
+        let axis = format!("7k.{}", pattern.rsplit_once('.').unwrap().0);
+        SegmentRow {
+            t0: TimeUs(t0),
+            t1: TimeUs(t1),
+            cols: 0b101,
+            axis: AxisId::parse(&axis).unwrap(),
+            pattern: PatternId::parse(pattern).unwrap(),
+            secondary: secondary
+                .iter()
+                .map(|p| PatternId::parse(p).unwrap())
+                .collect(),
+            purity: 900,
+            strength: 1000,
+        }
+    }
+
+    #[test]
+    fn segments_round_trip_in_order_and_replace_per_chart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_cache_db(&dir.path().join("cache.db")).unwrap();
+        let a = vec![
+            seg(
+                0,
+                2_000_000,
+                "regular.stream.jumpstream",
+                &["regular.tech.thumb"],
+            ),
+            seg(2_100_000, 4_000_000, "regular.jack.chordjack", &[]),
+        ];
+        let b = vec![seg(-500, 3_000_000, "regular.stream.jumpstream", &[])];
+        let (a2, b2) = (a.clone(), b.clone());
+        db.write(move |tx| {
+            segment::replace_for(tx, md5(MD5_A), VKEY_1, &[seg(0, 1, "ln.tech.shield", &[])])?;
+            segment::replace_for(tx, md5(MD5_A), VKEY_1, &a2)?;
+            segment::replace_for(tx, md5(MD5_B), VKEY_1, &b2)?;
+            segment::replace_for(tx, md5(MD5_A), VKEY_2, &b2)
+        })
+        .unwrap();
+        let (got_a, got_b, other_key, none) = db
+            .read(|c| {
+                Ok((
+                    segment::list_for(c, md5(MD5_A), VKEY_1)?,
+                    segment::list_for(c, md5(MD5_B), VKEY_1)?,
+                    segment::list_for(c, md5(MD5_A), VKEY_2)?,
+                    segment::list_for(c, md5(MD5_C), VKEY_1)?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(got_a, a, "replaced, in stored order");
+        assert_eq!(got_b, b);
+        assert_eq!(other_key, b);
+        assert!(none.is_empty());
+
+        let counts = db.read(|c| segment::counts_by_pattern(c, VKEY_1)).unwrap();
+        let jumpstream = PatternId::parse("regular.stream.jumpstream").unwrap();
+        let chordjack = PatternId::parse("regular.jack.chordjack").unwrap();
+        assert_eq!(
+            counts,
+            BTreeMap::from([
+                (
+                    chordjack,
+                    PatternCount {
+                        segments: 1,
+                        charts: 1,
+                        total_us: 1_900_000
+                    }
+                ),
+                (
+                    jumpstream,
+                    PatternCount {
+                        segments: 2,
+                        charts: 2,
+                        total_us: 5_000_500
+                    }
+                ),
+            ])
+        );
+        assert_eq!(db.read(|c| segment::count_charts(c, VKEY_1)).unwrap(), 2);
+    }
+
+    #[test]
+    fn segment_secondary_is_stored_sorted_without_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_cache_db(&dir.path().join("cache.db")).unwrap();
+        let messy = seg(
+            0,
+            1,
+            "regular.stream.single",
+            &[
+                "regular.tech.thumb",
+                "regular.jack.minijack",
+                "regular.tech.thumb",
+            ],
+        );
+        db.write(move |tx| segment::replace_for(tx, md5(MD5_A), VKEY_1, &[messy]))
+            .unwrap();
+        let got = db
+            .read(|c| segment::list_for(c, md5(MD5_A), VKEY_1))
+            .unwrap();
+        let secondary: Vec<&str> = got[0].secondary.iter().map(|p| p.as_str()).collect();
+        assert_eq!(secondary, ["regular.jack.minijack", "regular.tech.thumb"]);
+    }
+
+    #[test]
+    fn segments_prune_except() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_cache_db(&dir.path().join("cache.db")).unwrap();
+        db.write(|tx| {
+            segment::replace_for(tx, md5(MD5_A), VKEY_1, &[seg(0, 1, "ln.tech.shield", &[])])?;
+            segment::replace_for(tx, md5(MD5_A), VKEY_2, &[seg(0, 1, "ln.tech.shield", &[])])
+        })
+        .unwrap();
+        assert_eq!(
+            db.write(|tx| segment::prune_except(tx, &[VKEY_2])).unwrap(),
+            1
+        );
+        assert_eq!(db.read(|c| segment::count_charts(c, VKEY_1)).unwrap(), 0);
+        assert_eq!(db.read(|c| segment::count_charts(c, VKEY_2)).unwrap(), 1);
     }
 
     #[test]

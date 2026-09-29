@@ -8,7 +8,7 @@ use crate::db::{DbHandle, DbKind};
 use crate::error::StoreError;
 
 /// Bumped on any schema change; a mismatch deletes and rebuilds the file.
-pub const CACHE_SCHEMA_VERSION: u32 = 2;
+pub const CACHE_SCHEMA_VERSION: u32 = 3;
 
 const SCHEMA: &str = include_str!("schema.sql");
 const SIDECARS: [&str; 2] = ["-wal", "-shm"];
@@ -83,7 +83,7 @@ mod tests {
     use super::*;
     use crate::user::open_user_db;
 
-    const TABLES: [&str; 7] = [
+    const TABLES: [&str; 8] = [
         "alias_stats",
         "catalog_chart",
         "chart_label",
@@ -91,6 +91,7 @@ mod tests {
         "derivation",
         "item_failure",
         "job_run",
+        "segment",
     ];
 
     fn tables(db: &DbHandle) -> Vec<String> {
@@ -170,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_cache_is_rebuilt_to_current_schema() {
+    fn older_cache_is_rebuilt_to_current_schema() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cache.db");
         let v1 = Connection::open(&path).unwrap();
@@ -187,8 +188,37 @@ mod tests {
         assert_eq!(tables(&db), TABLES);
         assert_eq!(job_rows(&db), 0);
         drop(db);
-        assert_eq!(CACHE_SCHEMA_VERSION, 2);
-        assert_eq!(version(&path), 2);
+        assert_eq!(CACHE_SCHEMA_VERSION, 3);
+        assert_eq!(version(&path), 3);
+    }
+
+    #[test]
+    fn segment_rows_are_strict_and_keyed_by_a_32_byte_vkey() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_cache_db(&dir.path().join("cache.db")).unwrap();
+        let insert = "INSERT INTO segment (md5, vkey, idx, t0_us, t1_us, cols, axis_id, pattern_id,
+                secondary_json, purity, strength) VALUES ('m', ?1, 0, 0, 1, 3, 'a', 'p', '[]', 1000, 500)";
+        let short = db.write(|tx| Ok(tx.0.execute(insert, [vec![1_u8; 31]])?));
+        assert!(short.is_err());
+        let backwards = db.write(|tx| {
+            Ok(tx.0.execute(
+                "INSERT INTO segment VALUES ('m', ?1, 0, 5, 1, 3, 'a', 'p', '[]', 1000, 500)",
+                [vec![1_u8; 32]],
+            )?)
+        });
+        assert!(backwards.is_err(), "t1 before t0");
+        let not_json = db.write(|tx| {
+            Ok(tx.0.execute(
+                "INSERT INTO segment VALUES ('m', ?1, 1, 0, 1, 3, 'a', 'p', '[oops', 1000, 500)",
+                [vec![1_u8; 32]],
+            )?)
+        });
+        assert!(not_json.is_err(), "secondary_json must be JSON");
+        assert_eq!(
+            db.write(|tx| Ok(tx.0.execute(insert, [vec![1_u8; 32]])?))
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

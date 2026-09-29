@@ -113,6 +113,8 @@ export type IndexLibrarySummaryDto = {
 	/**  Missing from `Songs/` or edited since osu!.db recorded its md5; retried next run. */
 	skippedUnavailable: number,
 	labelsWritten: number,
+	/**  Pattern segments stored this run (`patterns` stage). */
+	segmentsWritten: number,
 	failedItems: number,
 };
 

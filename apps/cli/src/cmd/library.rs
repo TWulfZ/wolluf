@@ -1,4 +1,4 @@
-//! `wolluf library index|list|scales` over `LibraryService` and `IndexLibrary` (F1).
+//! `wolluf library index|list|scales|patterns` over `LibraryService` and `IndexLibrary` (F1).
 
 use std::future::Future;
 use std::process::ExitCode;
@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use wolluf_app::context::AppContext;
 use wolluf_app::errors::AppError;
 use wolluf_app::features::library::dto::{
-    ChartLabelDto, LibraryChartDto, LibraryFilterDto, ScaleCountDto,
+    ChartLabelDto, LibraryChartDto, LibraryFilterDto, PatternCountDto, ScaleCountDto,
 };
 use wolluf_app::jobs::JobStatusDto;
 use wolluf_app::jobs::dto::{JobDto, JobStartDto, JobSummaryDto};
@@ -38,6 +38,14 @@ pub(crate) async fn run(ctx: &AppContext, cmd: LibraryCmd, json: bool) -> anyhow
                 render::json(&scales)?;
             } else {
                 render::text(&scales_table(&scales))?;
+            }
+        }
+        LibraryCmd::Patterns => {
+            let counts = ctx.library().pattern_counts().await?;
+            if json {
+                render::json(&counts)?;
+            } else {
+                render::text(&patterns_table(&counts))?;
             }
         }
     }
@@ -96,6 +104,7 @@ fn job_text(job: &JobDto) -> String {
             ("skipped memoized", s.skipped_memoized.to_string()),
             ("skipped unavailable", s.skipped_unavailable.to_string()),
             ("labels written", s.labels_written.to_string()),
+            ("segments written", s.segments_written.to_string()),
             ("failed items", s.failed_items.to_string()),
         ]);
     }
@@ -158,6 +167,26 @@ fn charts_table(charts: &[LibraryChartDto]) -> String {
         &[
             "MD5", "TITLE", "VERSION", "NOTES", "LN%", "LENGTH", "NPS", "LABELS",
         ],
+        &rows,
+    )
+}
+
+fn patterns_table(counts: &[PatternCountDto]) -> String {
+    let rows: Vec<Vec<String>> = counts
+        .iter()
+        .map(|c| {
+            vec![
+                c.keymode.to_string(),
+                c.key.clone(),
+                c.pattern_id.clone(),
+                c.segments.to_string(),
+                c.charts.to_string(),
+                format!("{:.1}", c.total_s),
+            ]
+        })
+        .collect();
+    render::table(
+        &["KEYS", "KEY", "PATTERN", "SEGMENTS", "CHARTS", "SECONDS"],
         &rows,
     )
 }

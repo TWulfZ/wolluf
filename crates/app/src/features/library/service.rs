@@ -7,24 +7,31 @@ use std::path::Path;
 use tokio::sync::broadcast::error::RecvError;
 use wolluf_core::{ChartMd5, ErrorCode, Keymode, TimeUs};
 use wolluf_engine::profile::Registry;
-use wolluf_engine::render::{RenderOpts, render_window};
+use wolluf_engine::render::{RenderOpts, RowMark, render_window};
 use wolluf_engine::rows_blob::decode_rows;
 use wolluf_engine::stage::chart_parse::parse_chart;
+use wolluf_engine::taxonomy;
 use wolluf_source_osu::songs::read_chart_verified;
 use wolluf_store::repo::cache::{
-    CatalogChart, ChartLabel, LabelFilter, ParsedSummary, catalog_chart, chart_label as label_repo,
-    chart_parsed,
+    CatalogChart, ChartLabel, LabelFilter, ParsedSummary, SegmentRow, catalog_chart,
+    chart_label as label_repo, chart_parsed, segment as segment_repo,
 };
 use wolluf_store::{Conn, DbHandle, StoreError};
 
-use super::dto::{ChartDetailDto, ChartLabelDto, LibraryChartDto, LibraryFilterDto, ScaleCountDto};
-use super::index::{IndexLibraryJob, Keys, catalog_install};
+use super::dto::{
+    ChartDetailDto, ChartLabelDto, LibraryChartDto, LibraryFilterDto, PatternCountDto,
+    ScaleCountDto, SegmentDto,
+};
+use super::index::{IndexLibraryJob, Keys, Segmenters, catalog_install};
 use crate::context::{AppContext, blocking_join_error, songs_dir};
 use crate::errors::AppError;
 use crate::events::AppEvent;
 use crate::jobs::dto::{JobDto, JobId};
 
 const MS_PER_SECOND: f64 = 1_000.0;
+const US_PER_SECOND: f64 = 1_000_000.0;
+/// Shown for a pattern id the keymode's taxonomy does not know.
+const UNKNOWN_KEY: &str = "?";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChartRows {
@@ -105,13 +112,17 @@ impl<'a> LibraryService<'a> {
         self.blocking(move |dbs, keys| get(&dbs, keys, md5)).await
     }
 
-    /// `from_ms <= t < to_ms`. `layout_id` defaults to the keymode profile's layout.
+    /// `from_ms <= t < to_ms`. `layout_id` defaults to the keymode profile's layout. With
+    /// `segments`, each row names the primary pattern of the segment covering it (by taxonomy
+    /// key, `*` on the segment's first row) and a legend follows, naming the layout the segments
+    /// were computed with (the profile's default), or `segments: none`.
     pub async fn render(
         &self,
         md5: &str,
         from_ms: i32,
         to_ms: i32,
         layout_id: Option<&str>,
+        segments: bool,
     ) -> Result<String, AppError> {
         let md5 = parse_md5(md5)?;
         if from_ms >= to_ms {
@@ -136,13 +147,86 @@ impl<'a> LibraryService<'a> {
                     .layout_by_id(&id)
                     .ok_or_else(|| AppError::invalid_input().with_arg("layoutId", id))?,
             };
-            Ok(render_window(
-                &chart,
-                &layout,
-                TimeUs::from_ms(from_ms),
-                TimeUs::from_ms(to_ms),
-                &RenderOpts::default(),
-            ))
+            let (from, to) = (TimeUs::from_ms(from_ms), TimeUs::from_ms(to_ms));
+            let segmenters = Segmenters::current()?;
+            let keymode = chart.keymode().columns();
+            let rows = if segments {
+                dbs.cache
+                    .read(|c| segment_rows(c, &segmenters, md5, keymode))?
+            } else {
+                Vec::new()
+            };
+            let taxonomy = profile.taxonomy;
+            let marks = rows
+                .iter()
+                .map(|r| RowMark {
+                    t0: r.t0,
+                    t1: r.t1,
+                    label: key_of(taxonomy, r.pattern.as_str()).to_owned(),
+                })
+                .collect();
+            let opts = RenderOpts {
+                marks,
+                ..RenderOpts::default()
+            };
+            let mut text = render_window(&chart, &layout, from, to, &opts);
+            if segments {
+                let layout_id = segmenters.get(keymode).map_or("-", |s| s.layout_id());
+                text.push_str(&legend(taxonomy, layout_id, &rows, from, to));
+            }
+            Ok(text)
+        })
+        .await
+    }
+
+    /// The chart's segments under its profile's default layout, in time order; `NOT_FOUND`
+    /// unless the chart is parsed.
+    pub async fn segments(&self, md5: &str) -> Result<Vec<SegmentDto>, AppError> {
+        let md5 = parse_md5(md5)?;
+        self.blocking(move |dbs, keys| {
+            let (chart, parsed) = dbs.cache.read(|c| {
+                Ok((
+                    catalog_chart::get(c, md5)?,
+                    chart_parsed::exists(c, md5, keys.parse)?,
+                ))
+            })?;
+            let chart = chart.filter(|_| parsed).ok_or_else(|| not_found(md5))?;
+            let segmenters = Segmenters::current()?;
+            Ok(dbs
+                .cache
+                .read(|c| segment_dtos(c, &segmenters, md5, chart.keymode))?)
+        })
+        .await
+    }
+
+    /// Primary segments per pattern over the library, per keymode profile, in pattern id order.
+    pub async fn pattern_counts(&self) -> Result<Vec<PatternCountDto>, AppError> {
+        self.blocking(|dbs, _keys| {
+            let segmenters = Segmenters::current()?;
+            let mut out = Vec::new();
+            for profile in Registry::builtin().profiles() {
+                let keymode = profile.keymode.columns();
+                let Some(segmenter) = segmenters.get(keymode) else {
+                    continue;
+                };
+                let vkey = segmenter.vkey();
+                let counts = dbs
+                    .cache
+                    .read(|c| segment_repo::counts_by_pattern(c, vkey))?;
+                out.extend(counts.into_iter().map(|(pattern, n)| {
+                    let def = taxonomy::by_id(profile.taxonomy, pattern.as_str());
+                    PatternCountDto {
+                        keymode,
+                        key: def.map_or(UNKNOWN_KEY, |d| d.key).to_owned(),
+                        axis_id: def.map_or_else(String::new, |d| d.axis.to_string()),
+                        pattern_id: pattern.to_string(),
+                        segments: saturating(n.segments),
+                        charts: saturating(n.charts),
+                        total_s: n.total_us as f64 / US_PER_SECOND,
+                    }
+                }));
+            }
+            Ok(out)
         })
         .await
     }
@@ -188,6 +272,79 @@ impl<'a> LibraryService<'a> {
         })
         .await
     }
+}
+
+fn key_of(taxonomy: &[taxonomy::PatternDef], pattern: &str) -> &'static str {
+    taxonomy::by_id(taxonomy, pattern).map_or(UNKNOWN_KEY, |d| d.key)
+}
+
+/// `keymode`'s segments of the chart; none for a keymode without a patterns stage.
+fn segment_rows(
+    c: Conn<'_>,
+    segmenters: &Segmenters,
+    md5: ChartMd5,
+    keymode: u8,
+) -> Result<Vec<SegmentRow>, StoreError> {
+    match segmenters.get(keymode) {
+        Some(s) => segment_repo::list_for(c, md5, s.vkey()),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn segment_dtos(
+    c: Conn<'_>,
+    segmenters: &Segmenters,
+    md5: ChartMd5,
+    keymode: u8,
+) -> Result<Vec<SegmentDto>, StoreError> {
+    let taxonomy = Keymode::new(keymode)
+        .ok()
+        .and_then(|k| Registry::builtin().profile(k))
+        .map_or(&[][..], |p| p.taxonomy);
+    let rows = segment_rows(c, segmenters, md5, keymode)?;
+    Ok(rows
+        .into_iter()
+        .map(|r| SegmentDto {
+            t0_ms: ms_i32(r.t0),
+            t1_ms: ms_i32(r.t1),
+            cols: r.cols,
+            key: key_of(taxonomy, r.pattern.as_str()).to_owned(),
+            pattern_id: r.pattern.to_string(),
+            axis_id: r.axis.to_string(),
+            secondary: r.secondary.iter().map(ToString::to_string).collect(),
+            purity: r.purity,
+            strength: r.strength,
+        })
+        .collect())
+}
+
+fn ms_i32(t: TimeUs) -> i32 {
+    let ms = t.as_ms_floor();
+    i32::try_from(ms).unwrap_or(if ms < 0 { i32::MIN } else { i32::MAX })
+}
+
+/// The patterns drawn in `[from, to)`, one `key  pattern id` line each, in key order, under
+/// the layout the segments were computed with (it may differ from the one drawn).
+fn legend(
+    taxonomy: &[taxonomy::PatternDef],
+    layout_id: &str,
+    rows: &[SegmentRow],
+    from: TimeUs,
+    to: TimeUs,
+) -> String {
+    let shown: BTreeSet<(&str, &str)> = rows
+        .iter()
+        .filter(|r| r.t0 < to && r.t1 >= from)
+        .map(|r| (key_of(taxonomy, r.pattern.as_str()), r.pattern.as_str()))
+        .collect();
+    if shown.is_empty() {
+        return "segments: none\n".to_owned();
+    }
+    let mut out = format!("segments ({layout_id}, * first row):\n");
+    for (key, pattern) in shown {
+        out.push_str(&format!("  {key:<3} {pattern}\n"));
+    }
+    out
 }
 
 fn saturating(n: u64) -> u32 {
@@ -353,7 +510,12 @@ fn get(dbs: &Dbs, keys: Keys, md5: ChartMd5) -> Result<ChartDetailDto, AppError>
     let (Some(chart), Some(parsed)) = (chart, parsed) else {
         return Err(not_found(md5));
     };
+    let segmenters = Segmenters::current()?;
+    let segments = dbs
+        .cache
+        .read(|c| segment_dtos(c, &segmenters, md5, chart.keymode))?;
     Ok(ChartDetailDto {
+        segments,
         diagnostics: diagnostics(dbs, &chart)?,
         chart: chart_dto(&chart, &parsed.summary(), labels),
     })
@@ -383,7 +545,9 @@ mod tests {
 
     use super::*;
     use crate::events::AppEvent;
-    use crate::features::library::dto::{LibraryFilterDto, ScaleCountDto};
+    use crate::features::library::dto::{
+        LibraryFilterDto, PatternCountDto, ScaleCountDto, SegmentDto,
+    };
     use crate::features::library::testkit::{Map, osu_text, synced};
     use crate::jobs::dto::{JobKindDto, JobStartDto, JobStatusDto};
 
@@ -581,31 +745,126 @@ mod tests {
         let (f, _) = synced(std::slice::from_ref(&map), &[]).await;
         let svc = f.ctx.library();
 
-        let text = svc.render(&map.md5, 0, 2_000, None).await.unwrap();
+        let text = svc.render(&map.md5, 0, 2_000, None, false).await.unwrap();
         assert!(text.contains("00:01.000"), "{text}");
         assert!(text.contains("00:01.250"), "{text}");
         assert!(text.contains('H') && text.contains('T'), "{text}");
         let named = svc
-            .render(&map.md5, 0, 2_000, Some("k7.313_right_thumb"))
+            .render(&map.md5, 0, 2_000, Some("k7.313_right_thumb"), false)
             .await
             .unwrap();
         assert_eq!(named, text);
         let left_thumb = svc
-            .render(&map.md5, 0, 2_000, Some("k7.313_left_thumb"))
+            .render(&map.md5, 0, 2_000, Some("k7.313_left_thumb"), false)
             .await
             .unwrap();
         assert!(left_thumb.contains("k7.313_left_thumb"), "{left_thumb}");
-        let wrong_keymode = svc.render(&map.md5, 0, 2_000, Some("k4.generic")).await;
+        let wrong_keymode = svc
+            .render(&map.md5, 0, 2_000, Some("k4.generic"), false)
+            .await;
         assert_eq!(wrong_keymode.unwrap_err().code, ErrorCode::InvalidInput);
-        let window = svc.render(&map.md5, 1_100, 2_000, None).await.unwrap();
+        let window = svc
+            .render(&map.md5, 1_100, 2_000, None, false)
+            .await
+            .unwrap();
         assert!(!window.contains("00:01.000"), "{window}");
 
-        let bad_layout = svc.render(&map.md5, 0, 2_000, Some("k7.nope")).await;
+        let bad_layout = svc.render(&map.md5, 0, 2_000, Some("k7.nope"), false).await;
         assert_eq!(bad_layout.unwrap_err().code, ErrorCode::InvalidInput);
-        let empty_window = svc.render(&map.md5, 2_000, 2_000, None).await;
+        let empty_window = svc.render(&map.md5, 2_000, 2_000, None, false).await;
         assert_eq!(empty_window.unwrap_err().code, ErrorCode::InvalidInput);
-        let unknown = svc.render(&"0".repeat(32), 0, 1, None).await;
+        let unknown = svc.render(&"0".repeat(32), 0, 1, None, false).await;
         assert_eq!(unknown.unwrap_err().code, ErrorCode::NotFound);
+    }
+
+    fn longjack() -> SegmentDto {
+        SegmentDto {
+            t0_ms: 1_000,
+            t1_ms: 1_500,
+            cols: 1,
+            pattern_id: "regular.jack.longjack".into(),
+            key: "lj".into(),
+            axis_id: "7k.regular.jack".into(),
+            secondary: Vec::new(),
+            purity: 1_000,
+            strength: 1_000,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn segments_and_pattern_counts() {
+        let jacks = Map::jacks("jacks");
+        let plain = Map::k7("plain");
+        let (f, _) = synced(&[jacks.clone(), plain.clone()], &[]).await;
+        let svc = f.ctx.library();
+        assert_eq!(svc.segments(&jacks.md5).await.unwrap(), [longjack()]);
+        assert_eq!(svc.segments(&plain.md5).await.unwrap(), []);
+        assert_eq!(
+            svc.segments(&"0".repeat(32)).await.unwrap_err().code,
+            ErrorCode::NotFound
+        );
+        assert_eq!(svc.get(&jacks.md5).await.unwrap().segments, [longjack()]);
+        assert_eq!(
+            svc.pattern_counts().await.unwrap(),
+            [PatternCountDto {
+                keymode: 7,
+                pattern_id: "regular.jack.longjack".into(),
+                key: "lj".into(),
+                axis_id: "7k.regular.jack".into(),
+                segments: 1,
+                charts: 1,
+                total_s: 0.5,
+            }]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn render_marks_segment_rows_and_adds_a_legend() {
+        let jacks = Map::jacks("jacks");
+        let (f, _) = synced(std::slice::from_ref(&jacks), &[]).await;
+        let svc = f.ctx.library();
+        let marked = svc.render(&jacks.md5, 0, 3_000, None, true).await.unwrap();
+        let lines: Vec<&str> = marked.lines().collect();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("00:01.000") && l.ends_with("* lj")),
+            "{marked}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("00:01.500") && l.ends_with("| lj")),
+            "{marked}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.trim() == "lj  regular.jack.longjack"),
+            "{marked}"
+        );
+        assert!(
+            marked.contains(
+                "segments (k7.313_right_thumb, * first row):\n  lj  regular.jack.longjack\n"
+            ),
+            "{marked}"
+        );
+        // Another display layout still names the layout the segments were computed under.
+        let left = svc
+            .render(&jacks.md5, 0, 3_000, Some("k7.313_left_thumb"), true)
+            .await
+            .unwrap();
+        assert!(
+            left.contains("segments (k7.313_right_thumb, * first row):"),
+            "{left}"
+        );
+        let empty = svc
+            .render(&jacks.md5, 2_000, 3_000, None, true)
+            .await
+            .unwrap();
+        assert!(empty.ends_with("segments: none\n"), "{empty}");
+        let plain = svc.render(&jacks.md5, 0, 3_000, None, false).await.unwrap();
+        assert!(!plain.contains("lj"), "{plain}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -98,6 +98,8 @@ pub(crate) enum LibraryCmd {
     List(LibraryListArgs),
     /// Label rows and charts per scale.
     Scales,
+    /// Primary pattern segments per pattern.
+    Patterns,
 }
 
 #[derive(Debug, Args)]
@@ -129,7 +131,7 @@ pub(crate) struct LibraryListArgs {
 pub(crate) enum ChartCmd {
     /// Print an ASCII playfield of one time window.
     Show(ChartShowArgs),
-    /// Print the chart's metadata, summary and labels.
+    /// Print the chart's metadata, summary, labels and pattern segments.
     Info {
         #[arg(value_name = "MD5")]
         md5: String,
@@ -152,6 +154,9 @@ pub(crate) struct ChartShowArgs {
     /// Layout preset id (e.g. `k7.313_left_thumb`); defaults to the keymode's layout.
     #[arg(long, value_name = "ID")]
     pub(crate) layout: Option<String>,
+    /// Name each row's pattern segment (default layout) and print a legend.
+    #[arg(long)]
+    pub(crate) segments: bool,
 }
 
 impl ChartShowArgs {
@@ -448,6 +453,25 @@ mod tests {
             panic!("{:?}", cli.command);
         };
         assert_eq!(args.window(), (0, 5_000));
+    }
+
+    #[test]
+    fn chart_show_segments_flag_and_library_patterns() {
+        let cli = Cli::try_parse_from(["wolluf", "chart", "show", "abc", "--segments"]).unwrap();
+        let Command::Chart(ChartCmd::Show(args)) = cli.command else {
+            panic!("{:?}", cli.command);
+        };
+        assert!(args.segments);
+        let cli = Cli::try_parse_from(["wolluf", "chart", "show", "abc"]).unwrap();
+        let Command::Chart(ChartCmd::Show(args)) = cli.command else {
+            panic!("{:?}", cli.command);
+        };
+        assert!(!args.segments);
+        let cli = Cli::try_parse_from(["wolluf", "library", "patterns"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Library(LibraryCmd::Patterns)
+        ));
     }
 
     #[test]

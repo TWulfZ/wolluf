@@ -192,3 +192,129 @@ fn unknown_chart_exits_2_not_found() {
         .code(2)
         .stderr(starts_with("error[NOT_FOUND]: "));
 }
+
+/// Six presses in column 0 from 1 s, 100 ms apart: one `regular.jack.longjack` segment.
+fn jacks_synced() -> (Env, String) {
+    let env = Env::new();
+    let taps: Vec<(u8, i32)> = (0..6).map(|i| (0, 1_000 + i * 100)).collect();
+    let (root, md5) = env.install_with_chart(&osu_7k(&taps, &[]));
+    env.set_install(&root);
+    env.json(&["sync"]);
+    (env, md5)
+}
+
+#[test]
+fn index_reports_segments_written() {
+    let (env, _) = jacks_synced();
+    let jobs = env.json(&["jobs", "list"]);
+    let index = jobs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["kind"] == "index_library")
+        .unwrap_or_else(|| panic!("{jobs}"));
+    assert_eq!(
+        index["summary"]["counters"]["segmentsWritten"], 1,
+        "{index}"
+    );
+    let text = stdout(&env, &["library", "index"]);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("segments written") && l.ends_with('0')),
+        "{text}"
+    );
+}
+
+#[test]
+fn chart_show_segments_marks_rows_and_prints_a_legend() {
+    let (env, md5) = jacks_synced();
+    let out = stdout(&env, &["chart", "show", &md5, "--to", "3", "--segments"]);
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("00:01.000") && l.ends_with("* lj")),
+        "{out}"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("00:01.300") && l.ends_with("| lj")),
+        "{out}"
+    );
+    assert!(
+        out.ends_with("segments (k7.313_right_thumb, * first row):\n  lj  regular.jack.longjack\n"),
+        "{out}"
+    );
+    let plain = stdout(&env, &["chart", "show", &md5, "--to", "3"]);
+    assert!(!plain.contains("lj"), "{plain}");
+    let left = stdout(
+        &env,
+        &[
+            "chart",
+            "show",
+            &md5,
+            "--to",
+            "3",
+            "--segments",
+            "--layout",
+            "k7.313_left_thumb",
+        ],
+    );
+    assert!(
+        left.contains("segments (k7.313_right_thumb, * first row):"),
+        "{left}"
+    );
+    let none = stdout(
+        &env,
+        &[
+            "chart",
+            "show",
+            &md5,
+            "--from",
+            "2",
+            "--to",
+            "3",
+            "--segments",
+        ],
+    );
+    assert!(none.ends_with("segments: none\n"), "{none}");
+}
+
+#[test]
+fn chart_info_lists_segments() {
+    let (env, md5) = jacks_synced();
+    let detail = env.json(&["chart", "info", &md5]);
+    let segments = detail["segments"].as_array().unwrap();
+    assert_eq!(segments.len(), 1, "{detail}");
+    assert_eq!(segments[0]["patternId"], "regular.jack.longjack");
+    assert_eq!(segments[0]["key"], "lj");
+    assert_eq!(
+        (segments[0]["t0Ms"].as_i64(), segments[0]["t1Ms"].as_i64()),
+        (Some(1_000), Some(1_500))
+    );
+    let text = stdout(&env, &["chart", "info", &md5]);
+    assert!(
+        text.lines().any(|l| l.starts_with("segment")
+            && l.contains("00:01.000-00:01.500")
+            && l.contains("lj regular.jack.longjack")),
+        "{text}"
+    );
+}
+
+#[test]
+fn library_patterns_counts_primary_segments() {
+    let (env, _) = jacks_synced();
+    let counts = env.json(&["library", "patterns"]);
+    assert_eq!(counts.as_array().unwrap().len(), 1, "{counts}");
+    assert_eq!(counts[0]["patternId"], "regular.jack.longjack");
+    assert_eq!(
+        (counts[0]["segments"].as_u64(), counts[0]["charts"].as_u64()),
+        (Some(1), Some(1))
+    );
+    let table = stdout(&env, &["library", "patterns"]);
+    let mut lines = table.lines();
+    assert!(lines.next().unwrap().starts_with("KEYS"), "{table}");
+    let row = lines.next().unwrap_or_else(|| panic!("{table}"));
+    assert!(
+        row.contains("lj") && row.contains("regular.jack.longjack"),
+        "{table}"
+    );
+}

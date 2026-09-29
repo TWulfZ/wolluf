@@ -27,14 +27,38 @@ const ELLIPSIS: &str = "...";
 pub struct RenderOpts {
     /// Consecutive rows further apart than this get an ellipsis line between them.
     pub gap_ellipsis: TimeUs,
+    /// Row annotations, e.g. pattern segments; the first matching mark labels a row.
+    pub marks: Vec<RowMark>,
 }
 
 impl Default for RenderOpts {
     fn default() -> Self {
         Self {
             gap_ellipsis: TimeUs::from_ms(1_000),
+            marks: Vec::new(),
         }
     }
+}
+
+/// Labels the rows with `t0 <= t <= t1`: `* label` on the row at `t0`, `| label` on the rest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowMark {
+    pub t0: TimeUs,
+    pub t1: TimeUs,
+    pub label: String,
+}
+
+const MARK_START: char = '*';
+const MARK_CONTINUES: char = '|';
+
+fn mark_of(marks: &[RowMark], t: TimeUs) -> Option<String> {
+    let m = marks.iter().find(|m| m.t0 <= t && t <= m.t1)?;
+    let lead = if m.t0 == t {
+        MARK_START
+    } else {
+        MARK_CONTINUES
+    };
+    Some(format!("  {lead} {}", m.label))
 }
 
 /// Rows with `from <= t < to`. A layout of another keymode falls back to the chart's generic
@@ -80,7 +104,8 @@ pub fn render_window(
         }
         let held = chart.hold_mask(row.t);
         let cells = field.draw(|col| glyph(row.tap, row.ln_head, row.ln_tail, held, col));
-        lines.push(format!("{:>width$}  {cells}", timestamp(row.t)));
+        let mark = mark_of(&opts.marks, row.t).unwrap_or_default();
+        lines.push(format!("{:>width$}  {cells}{mark}", timestamp(row.t)));
         prev = Some(row.t);
     }
 
@@ -282,6 +307,31 @@ mod tests {
     }
 
     #[test]
+    fn marks_annotate_the_rows_they_cover_and_flag_the_first() {
+        let chart = chart![step = 100; "x......", ".x.....", "..x....", "...x..."];
+        let opts = RenderOpts {
+            marks: vec![RowMark {
+                t0: s(100),
+                t1: s(200),
+                label: "st".to_owned(),
+            }],
+            ..RenderOpts::default()
+        };
+        let out = render_window(&chart, &k7(), s(0), s(1_000), &opts);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "00:00.300  ...|o+...",
+                "00:00.200  ..o|.+...  | st",
+                "00:00.100  .o.|.+...  * st",
+                "00:00.000  o..|.+...",
+                "           rmi|t+imr  k7.313_right_thumb",
+            ]
+        );
+    }
+
+    #[test]
     fn window_is_half_open() {
         let chart = chart![step = 100; "x......", ".x.....", "..x....", "...x..."];
         let out = render_window(&chart, &k7(), s(100), s(300), &RenderOpts::default());
@@ -305,9 +355,11 @@ mod tests {
         let chart = chart![step = 500; "x......", ".......", ".x....."];
         let tight = RenderOpts {
             gap_ellipsis: s(999),
+            ..RenderOpts::default()
         };
         let loose = RenderOpts {
             gap_ellipsis: s(1_000),
+            ..RenderOpts::default()
         };
         let with = render_window(&chart, &k7(), s(0), s(2_000), &tight);
         let without = render_window(&chart, &k7(), s(0), s(2_000), &loose);

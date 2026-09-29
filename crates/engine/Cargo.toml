@@ -16,6 +16,7 @@ test-support = ["wolluf-chart/test-support"]
 [dependencies]
 wolluf-core.workspace = true
 wolluf-chart.workspace = true
+wolluf-patterns.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 postcard.workspace = true

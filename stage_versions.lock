@@ -9,3 +9,7 @@ golden = "c92731abee25bde85b786cba13e5f7cc65efdfc979e20cc1588d1ffd725888a2"
 [stages."chart_parse"]
 version = 1
 golden = "ba3334e1f848735b9f7cdbfd9837aaa4c5557fb0a8c128ad56da83a6988e1c59"
+
+[stages."patterns"]
+version = 1
+golden = "3d14fbc8f7bccd69ca3f151de27dec9bcfd2422b15343338d9344dfc9fc669fc"
